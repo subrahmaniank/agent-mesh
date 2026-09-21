@@ -1,0 +1,36 @@
+namespace AgentPlatform {
+  entity User in [UserGroup] {
+    department: String,
+    clearance: Long
+  };
+  entity UserGroup;
+
+  entity Agent {
+    owner: String,
+    tier: String,
+    model: String
+  };
+
+  entity Tool {
+    mcp_server: String,
+    risk_level: String,
+    risk_level_score: Long,
+    target_environment: String
+  };
+
+  action "invoke" appliesTo {
+    principal: [User, Agent],
+    resource: [Agent]
+  };
+
+  action "call_tool" appliesTo {
+    principal: [Agent],
+    resource: [Tool],
+    context: {
+      user_id: String,
+      user_clearance: Long,
+      hitl_approved: Boolean,
+      payload: String
+    }
+  };
+}

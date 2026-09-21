@@ -1,0 +1,397 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AgentMesh - Unified Control Portal</title>
+  <script src="https://www.gstatic.com/antigravity/web/dev/tailwindcss.min.js"></script>
+</head>
+<body class="bg-slate-950 text-slate-100 min-h-screen flex antialiased">
+
+  <!-- Left Sidebar Navigation -->
+  <aside class="w-64 bg-slate-900 border-r border-slate-800 flex flex-col justify-between p-4 shrink-0">
+    <div class="space-y-6">
+      <!-- App Brand -->
+      <div class="flex items-center gap-3 px-2 py-1">
+        <div class="w-8 h-8 rounded-lg bg-indigo-600 flex items-center justify-center font-bold text-white shadow-lg shadow-indigo-500/30">
+          ⚡
+        </div>
+        <div>
+          <h1 class="font-bold text-sm tracking-wide text-white">AgentMesh</h1>
+          <span class="text-[11px] text-slate-400 font-mono">Control Portal v1.0</span>
+        </div>
+      </div>
+
+      <!-- Navigation Links -->
+      <nav class="space-y-1 text-sm font-medium">
+        <button onclick="navTo('overview')" id="nav-overview" class="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg bg-indigo-600 text-white font-semibold transition">
+          <span>📊</span> Overview & Health
+        </button>
+        <button onclick="navTo('onboarding')" id="nav-onboarding" class="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-slate-400 hover:bg-slate-800 hover:text-white transition">
+          <span>🤖</span> Agent Onboarding
+        </button>
+        <button onclick="navTo('cedar')" id="nav-cedar" class="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-slate-400 hover:bg-slate-800 hover:text-white transition">
+          <span>🛡️</span> Cedar Policy Sandbox
+        </button>
+        <button onclick="navTo('temporal')" id="nav-temporal" class="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-slate-400 hover:bg-slate-800 hover:text-white transition">
+          <span>⏳</span> Temporal Workflows
+        </button>
+        <button onclick="navTo('observability')" id="nav-observability" class="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-slate-400 hover:bg-slate-800 hover:text-white transition">
+          <span>📈</span> Observability & Traces
+        </button>
+        <button onclick="navTo('docs')" id="nav-docs" class="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-slate-400 hover:bg-slate-800 hover:text-white transition">
+          <span>📚</span> Documentation Hub
+        </button>
+      </nav>
+    </div>
+
+    <!-- Quick Service Status -->
+    <div class="bg-slate-950/60 border border-slate-800 rounded-xl p-3 space-y-2 text-xs font-mono">
+      <div class="text-[11px] font-semibold text-slate-400 uppercase tracking-wider">Service Mesh</div>
+      <div class="flex items-center justify-between text-slate-300">
+        <span>Temporal (7233)</span>
+        <span class="text-emerald-400">● Online</span>
+      </div>
+      <div class="flex items-center justify-between text-slate-300">
+        <span>Gateway (8080)</span>
+        <span class="text-emerald-400">● Online</span>
+      </div>
+      <div class="flex items-center justify-between text-slate-300">
+        <span>Presidio DLP (5001)</span>
+        <span class="text-emerald-400">● Online</span>
+      </div>
+      <div class="flex items-center justify-between text-slate-300">
+        <span>OTel Collector (4317)</span>
+        <span class="text-emerald-400">● Online</span>
+      </div>
+    </div>
+  </aside>
+
+  <!-- Main Content Area -->
+  <main class="flex-1 p-8 overflow-y-auto space-y-6">
+
+    <!-- VIEW 1: Overview & Launchers -->
+    <section id="view-overview" class="space-y-6">
+      <div class="flex items-center justify-between border-b border-slate-800 pb-4">
+        <div>
+          <h2 class="text-2xl font-bold text-white">Unified Platform Portal</h2>
+          <p class="text-sm text-slate-400">One-click launchers and integrated console for all platform subsystems.</p>
+        </div>
+        <div class="flex gap-3">
+          <a href="http://localhost:8233" target="_blank" class="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 rounded-lg text-xs font-semibold text-white flex items-center gap-2 shadow-lg shadow-indigo-500/20 transition">
+            Launch Temporal UI ↗
+          </a>
+        </div>
+      </div>
+
+      <!-- Quick Launch Grid -->
+      <div class="grid grid-cols-1 md:grid-cols-3 gap-5">
+        <!-- Card 1: Temporal -->
+        <div class="bg-slate-900 border border-slate-800 rounded-xl p-5 space-y-3 flex flex-col justify-between hover:border-indigo-500/50 transition shadow-sm">
+          <div>
+            <div class="flex items-center justify-between">
+              <span class="text-2xl">⏳</span>
+              <span class="px-2 py-0.5 rounded text-[11px] bg-blue-500/10 text-blue-400 border border-blue-500/20">Port 8233</span>
+            </div>
+            <h3 class="font-bold text-base text-white mt-2">Temporal Orchestrator</h3>
+            <p class="text-xs text-slate-400 mt-1">Inspect durable multi-agent DAGs, pause states, asynchronous HITL approvals, and Saga rollbacks.</p>
+          </div>
+          <div class="pt-3 border-t border-slate-800 flex gap-2">
+            <a href="http://localhost:8233" target="_blank" class="w-full text-center py-2 bg-slate-800 hover:bg-slate-700 text-white rounded-lg text-xs font-semibold transition">Open Temporal Console ↗</a>
+          </div>
+        </div>
+
+        <!-- Card 2: Observability -->
+        <div class="bg-slate-900 border border-slate-800 rounded-xl p-5 space-y-3 flex flex-col justify-between hover:border-indigo-500/50 transition shadow-sm">
+          <div>
+            <div class="flex items-center justify-between">
+              <span class="text-2xl">📈</span>
+              <span class="px-2 py-0.5 rounded text-[11px] bg-purple-500/10 text-purple-400 border border-purple-500/20">Port 4317</span>
+            </div>
+            <h3 class="font-bold text-base text-white mt-2">Observability Spine</h3>
+            <p class="text-xs text-slate-400 mt-1">Real-time token and cost accounting, trace waterfalls, and Zero Data Retention redaction audit.</p>
+          </div>
+          <div class="pt-3 border-t border-slate-800 flex gap-2">
+            <button onclick="navTo('observability')" class="w-full py-2 bg-slate-800 hover:bg-slate-700 text-white rounded-lg text-xs font-semibold transition">View Sinks & Metrics →</button>
+          </div>
+        </div>
+
+        <!-- Card 3: Security & DLP -->
+        <div class="bg-slate-900 border border-slate-800 rounded-xl p-5 space-y-3 flex flex-col justify-between hover:border-indigo-500/50 transition shadow-sm">
+          <div>
+            <div class="flex items-center justify-between">
+              <span class="text-2xl">🛡️</span>
+              <span class="px-2 py-0.5 rounded text-[11px] bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">Port 8080</span>
+            </div>
+            <h3 class="font-bold text-base text-white mt-2">Cedar Policy & Presidio</h3>
+            <p class="text-xs text-slate-400 mt-1">Sub-millisecond RBAC/ABAC authorization checks, destructive command guardrails, and PII masking.</p>
+          </div>
+          <div class="pt-3 border-t border-slate-800 flex gap-2">
+            <button onclick="navTo('cedar')" class="w-full py-2 bg-slate-800 hover:bg-slate-700 text-white rounded-lg text-xs font-semibold transition">Test Guardrails →</button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- VIEW 2: Agent Onboarding Wizard -->
+    <section id="view-onboarding" class="hidden space-y-6">
+      <div class="border-b border-slate-800 pb-4">
+        <h2 class="text-2xl font-bold text-white">Agent Onboarding Wizard</h2>
+        <p class="text-sm text-slate-400">Generate deployment manifests, environment variables, and runtime bindings.</p>
+      </div>
+
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+        <div class="bg-slate-900 border border-slate-800 rounded-xl p-6 space-y-4">
+          <h3 class="font-bold text-sm text-white">1. Configure Agent Parameters</h3>
+          
+          <div class="space-y-3 text-sm">
+            <div>
+              <label class="block text-xs font-medium text-slate-400 mb-1">Agent ID</label>
+              <input type="text" id="wiz-id" value="data-researcher" oninput="renderWizard()" class="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-sm text-slate-100 focus:ring-1 focus:ring-indigo-500 outline-none">
+            </div>
+            <div class="grid grid-cols-2 gap-3">
+              <div>
+                <label class="block text-xs font-medium text-slate-400 mb-1">Tenant</label>
+                <input type="text" id="wiz-tenant" value="tenant-enterprise" oninput="renderWizard()" class="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-sm text-slate-100 outline-none">
+              </div>
+              <div>
+                <label class="block text-xs font-medium text-slate-400 mb-1">Tier</label>
+                <select id="wiz-tier" onchange="renderWizard()" class="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-sm text-slate-100 outline-none">
+                  <option value="tier-1-prod">tier-1-prod</option>
+                  <option value="tier-2-internal">tier-2-internal</option>
+                  <option value="sandbox">sandbox</option>
+                </select>
+              </div>
+            </div>
+            <div class="grid grid-cols-2 gap-3">
+              <div>
+                <label class="block text-xs font-medium text-slate-400 mb-1">Framework</label>
+                <select id="wiz-framework" onchange="renderWizard()" class="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-sm text-slate-100 outline-none">
+                  <option value="CrewAI">CrewAI</option>
+                  <option value="LangGraph">LangGraph</option>
+                  <option value="AutoGen">AutoGen</option>
+                  <option value="Custom REST">Custom REST</option>
+                </select>
+              </div>
+              <div>
+                <label class="block text-xs font-medium text-slate-400 mb-1">LLM Model</label>
+                <select id="wiz-model" onchange="renderWizard()" class="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-sm text-slate-100 outline-none">
+                  <option value="gpt-4o">gpt-4o</option>
+                  <option value="claude-3-5-sonnet">claude-3-5-sonnet</option>
+                  <option value="gemini-1.5-pro">gemini-1.5-pro</option>
+                </select>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="bg-slate-900 border border-slate-800 rounded-xl p-6 space-y-4 flex flex-col justify-between">
+          <div>
+            <h3 class="font-bold text-sm text-white mb-2">2. Generated Agent Manifest & Shim Binding</h3>
+            <pre id="wiz-output" class="bg-slate-950 border border-slate-800 rounded-lg p-4 text-xs font-mono text-emerald-400 overflow-x-auto leading-relaxed"></pre>
+          </div>
+          <button onclick="navigator.clipboard.writeText(document.getElementById('wiz-output').innerText); alert('Copied to clipboard!')" class="w-full py-2 bg-indigo-600 hover:bg-indigo-500 rounded-lg text-xs font-semibold text-white transition">
+            Copy Manifest
+          </button>
+        </div>
+      </div>
+    </section>
+
+    <!-- VIEW 3: Cedar Sandbox -->
+    <section id="view-cedar" class="hidden space-y-6">
+      <div class="border-b border-slate-800 pb-4">
+        <h2 class="text-2xl font-bold text-white">Cedar Policy Sandbox</h2>
+        <p class="text-sm text-slate-400">Interactive ABAC/RBAC and OWASP LLM06 destructive invariant evaluator.</p>
+      </div>
+
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+        <div class="bg-slate-900 border border-slate-800 rounded-xl p-6 space-y-4">
+          <div class="space-y-3 text-sm">
+            <div>
+              <label class="block text-xs font-medium text-slate-400 mb-1">Principal Group</label>
+              <select id="cedar-group" class="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-sm text-slate-100">
+                <option value="AuthorizedOperators">AuthorizedOperators</option>
+                <option value="RestrictedUsers">RestrictedUsers</option>
+              </select>
+            </div>
+            <div class="grid grid-cols-2 gap-3">
+              <div>
+                <label class="block text-xs font-medium text-slate-400 mb-1">User Clearance (0-5)</label>
+                <input type="number" id="cedar-clearance" value="3" min="0" max="5" class="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-sm text-slate-100">
+              </div>
+              <div>
+                <label class="block text-xs font-medium text-slate-400 mb-1">Tool Risk Level (1-5)</label>
+                <input type="number" id="cedar-risk" value="2" min="1" max="5" class="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-sm text-slate-100">
+              </div>
+            </div>
+            <div>
+              <label class="block text-xs font-medium text-slate-400 mb-1">Tool Payload / Query</label>
+              <textarea id="cedar-payload" rows="3" class="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs font-mono text-slate-100">SELECT username, email FROM customers LIMIT 10;</textarea>
+            </div>
+            <div class="flex items-center gap-2">
+              <input type="checkbox" id="cedar-hitl" class="rounded">
+              <label for="cedar-hitl" class="text-xs text-slate-300">HITL Approval Confirmed (Signal Verified)</label>
+            </div>
+            <button onclick="runCedarEval()" class="w-full py-2.5 bg-indigo-600 hover:bg-indigo-500 rounded-lg text-xs font-semibold text-white transition">
+              Simulate Evaluation Decision
+            </button>
+          </div>
+        </div>
+
+        <div class="bg-slate-900 border border-slate-800 rounded-xl p-6 space-y-4">
+          <h3 class="font-bold text-sm text-white">Evaluation Output</h3>
+          <div id="cedar-result" class="p-4 rounded-xl border border-emerald-500/30 bg-emerald-500/10 text-emerald-400 space-y-2">
+            <div class="text-lg font-bold" id="cedar-dec">ALLOW</div>
+            <p class="text-xs text-slate-300" id="cedar-expl">Clearance satisfied and no destructive invariant triggered.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- VIEW 4: Temporal Web Integration -->
+    <section id="view-temporal" class="hidden space-y-6">
+      <div class="flex items-center justify-between border-b border-slate-800 pb-4">
+        <div>
+          <h2 class="text-2xl font-bold text-white">Temporal Orchestrator Console</h2>
+          <p class="text-sm text-slate-400">Durable state machines, signals, and asynchronous HITL gates.</p>
+        </div>
+        <a href="http://localhost:8233" target="_blank" class="px-3 py-1.5 bg-indigo-600 rounded-lg text-xs font-semibold text-white hover:bg-indigo-500 transition">
+          Open in New Window ↗
+        </a>
+      </div>
+      <div class="bg-slate-900 border border-slate-800 rounded-xl p-8 text-center space-y-4">
+        <div class="w-16 h-16 rounded-full bg-blue-500/10 text-blue-400 flex items-center justify-center text-3xl mx-auto border border-blue-500/20">
+          ⏳
+        </div>
+        <h3 class="text-lg font-bold text-white">Temporal Web UI is Running on Port 8233</h3>
+        <p class="text-sm text-slate-400 max-w-lg mx-auto">
+          Access the native Temporal console to inspect workflows (`HITLApprovalWorkflow`, `MultiAgentDAGWorkflow`), send approval signals, and view Saga compensations.
+        </p>
+        <a href="http://localhost:8233" target="_blank" class="inline-block px-6 py-2.5 bg-indigo-600 hover:bg-indigo-500 rounded-lg text-sm font-semibold text-white transition shadow-lg shadow-indigo-500/20">
+          Launch Temporal Web UI (http://localhost:8233)
+        </a>
+      </div>
+    </section>
+
+    <!-- VIEW 5: Observability -->
+    <section id="view-observability" class="hidden space-y-6">
+      <div class="border-b border-slate-800 pb-4">
+        <h2 class="text-2xl font-bold text-white">Observability & Analytics Hub</h2>
+        <p class="text-sm text-slate-400">OpenTelemetry spine, token usage, cost accounting, and ZDR verification.</p>
+      </div>
+
+      <div class="grid grid-cols-1 md:grid-cols-3 gap-5">
+        <div class="bg-slate-900 border border-slate-800 rounded-xl p-5 space-y-3">
+          <span class="text-xs text-slate-400 uppercase tracking-wider font-mono">Telemetry Pipeline</span>
+          <div class="text-lg font-bold text-white">OTel Collector Contrib</div>
+          <p class="text-xs text-slate-400">Zero Data Retention processor actively stripping prompt bodies and adding `privacy.sanitized=true` tags.</p>
+        </div>
+        <div class="bg-slate-900 border border-slate-800 rounded-xl p-5 space-y-3">
+          <span class="text-xs text-slate-400 uppercase tracking-wider font-mono">Connected Sink</span>
+          <div class="text-lg font-bold text-white">AgentOps.ai / Langfuse</div>
+          <p class="text-xs text-slate-400">Configured via environment tokens without requiring application code rebuilds.</p>
+        </div>
+        <div class="bg-slate-900 border border-slate-800 rounded-xl p-5 space-y-3">
+          <span class="text-xs text-slate-400 uppercase tracking-wider font-mono">Trace Context</span>
+          <div class="text-lg font-bold text-white">W3C Distributed Tracing</div>
+          <p class="text-xs text-slate-400">End-to-end trace propagation across Temporal, Gateway PEP, and downstream MCP servers.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- VIEW 6: Documentation -->
+    <section id="view-docs" class="hidden space-y-6">
+      <div class="border-b border-slate-800 pb-4">
+        <h2 class="text-2xl font-bold text-white">Platform Documentation Hub</h2>
+        <p class="text-sm text-slate-400">Quick links to technical guides and architecture specifications.</p>
+      </div>
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
+        <div class="bg-slate-900 border border-slate-800 rounded-xl p-4 space-y-1">
+          <h4 class="font-bold text-white">🚀 Agent Onboarding Guide</h4>
+          <p class="text-xs text-slate-400">Step-by-step instructions to register and configure a new agent.</p>
+        </div>
+        <div class="bg-slate-900 border border-slate-800 rounded-xl p-4 space-y-1">
+          <h4 class="font-bold text-white">📐 System Architecture & Topology</h4>
+          <p class="text-xs text-slate-400">Detailed component breakdown and network inversion specifications.</p>
+        </div>
+        <div class="bg-slate-900 border border-slate-800 rounded-xl p-4 space-y-1">
+          <h4 class="font-bold text-white">🛡️ Security & Cedar Policies</h4>
+          <p class="text-xs text-slate-400">IAM schemas, guardrail rules, and Microsoft Presidio DLP configuration.</p>
+        </div>
+        <div class="bg-slate-900 border border-slate-800 rounded-xl p-4 space-y-1">
+          <h4 class="font-bold text-white">⏳ Durable Orchestration & HITL</h4>
+          <p class="text-xs text-slate-400">Temporal state machines and Saga compensation rollbacks.</p>
+        </div>
+      </div>
+    </section>
+
+  </main>
+
+  <script>
+    function navTo(view) {
+      const views = ['overview', 'onboarding', 'cedar', 'temporal', 'observability', 'docs'];
+      views.forEach(v => {
+        document.getElementById(`view-${v}`).classList.add('hidden');
+        document.getElementById(`nav-${v}`).className = 'w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-slate-400 hover:bg-slate-800 hover:text-white transition';
+      });
+      document.getElementById(`view-${view}`).classList.remove('hidden');
+      document.getElementById(`nav-${view}`).className = 'w-full flex items-center gap-3 px-3 py-2.5 rounded-lg bg-indigo-600 text-white font-semibold transition';
+    }
+
+    function renderWizard() {
+      const id = document.getElementById('wiz-id').value;
+      const tenant = document.getElementById('wiz-tenant').value;
+      const tier = document.getElementById('wiz-tier').value;
+      const framework = document.getElementById('wiz-framework').value;
+      const model = document.getElementById('wiz-model').value;
+
+      document.getElementById('wiz-output').innerText = `# ${framework} Agent Configuration (.env)
+GATEWAY_URL=http://localhost:8080
+OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317
+AGENT_ID=${id}
+TENANT_ID=${tenant}
+AGENT_TIER=${tier}
+AGENT_MODEL=${model}
+
+# Runtime Shim Adapter
+from remote_runner.runner_shim import UniversalAgentShim
+shim = UniversalAgentShim(agent_id="${id}", tenant_id="${tenant}")
+`;
+    }
+
+    function runCedarEval() {
+      const group = document.getElementById('cedar-group').value;
+      const clearance = parseInt(document.getElementById('cedar-clearance').value);
+      const risk = parseInt(document.getElementById('cedar-risk').value);
+      const payload = document.getElementById('cedar-payload').value.toUpperCase();
+      const hitl = document.getElementById('cedar-hitl').checked;
+
+      const resBox = document.getElementById('cedar-result');
+      const dec = document.getElementById('cedar-dec');
+      const expl = document.getElementById('cedar-expl');
+
+      const isDestructive = payload.includes('DROP') || payload.includes('DELETE') || payload.includes('TRUNCATE') || payload.includes('RM -RF');
+
+      if (isDestructive && !hitl) {
+        resBox.className = "p-4 rounded-xl border border-red-500/30 bg-red-500/10 text-red-400 space-y-2";
+        dec.innerText = "FORBID / DENY";
+        expl.innerText = "OWASP LLM06 Invariant: Destructive SQL or shell operation detected without confirmed HITL approval.";
+      } else if (clearance < risk) {
+        resBox.className = "p-4 rounded-xl border border-amber-500/30 bg-amber-500/10 text-amber-400 space-y-2";
+        dec.innerText = "DENY";
+        expl.innerText = `Insufficient Clearance: User clearance (${clearance}) is lower than tool risk score (${risk}).`;
+      } else if (group !== "AuthorizedOperators") {
+        resBox.className = "p-4 rounded-xl border border-red-500/30 bg-red-500/10 text-red-400 space-y-2";
+        dec.innerText = "DENY";
+        expl.innerText = `Principal '${group}' is not authorized to invoke this agent.`;
+      } else {
+        resBox.className = "p-4 rounded-xl border border-emerald-500/30 bg-emerald-500/10 text-emerald-400 space-y-2";
+        dec.innerText = "ALLOW";
+        expl.innerText = `Clearance (${clearance}) >= tool risk (${risk}) and operator '${group}' is authorized.`;
+      }
+    }
+
+    renderWizard();
+  </script>
+</body>
+</html>

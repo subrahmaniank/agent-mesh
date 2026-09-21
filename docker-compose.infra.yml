@@ -1,0 +1,109 @@
+version: "3.8"
+
+services:
+  temporal:
+    image: temporalio/auto-setup:1.24.2
+    container_name: agent_temporal
+    environment:
+      - DB=postgres12
+      - DB_PORT=5432
+      - POSTGRES_USER=temporal
+      - POSTGRES_PWD=temporal
+      - POSTGRES_SEEDS=postgres
+    ports:
+      - "7233:7233"
+    depends_on:
+      - postgres
+    networks:
+      - agent-net
+
+  temporal-ui:
+    image: temporalio/ui:latest
+    container_name: agent_temporal_ui
+    environment:
+      - TEMPORAL_ADDRESS=temporal:7233
+      - TEMPORAL_CORS_ORIGINS=http://localhost:8233
+    ports:
+      - "8233:8080"
+    depends_on:
+      - temporal
+    networks:
+      - agent-net
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: agent_postgres
+    environment:
+      - POSTGRES_USER=temporal
+      - POSTGRES_PASSWORD=temporal
+      - POSTGRES_DB=temporal
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    networks:
+      - agent-net
+
+  presidio-analyzer:
+    image: mcr.microsoft.com/presidio-analyzer:latest
+    container_name: agent_presidio_analyzer
+    ports:
+      - "5001:3000"
+    networks:
+      - agent-net
+
+  presidio-anonymizer:
+    image: mcr.microsoft.com/presidio-anonymizer:latest
+    container_name: agent_presidio_anonymizer
+    ports:
+      - "5002:3000"
+    networks:
+      - agent-net
+
+  redis:
+    image: redis:7-alpine
+    container_name: agent_redis
+    ports:
+      - "6379:6379"
+    networks:
+      - agent-net
+
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.100.0
+    container_name: agent_otel_collector
+    command: ["--config=/etc/otel-collector-config.yaml"]
+    environment:
+      - AGENTOPS_API_KEY=${AGENTOPS_API_KEY:-dummy_key}
+      - LANGFUSE_AUTH_TOKEN=${LANGFUSE_AUTH_TOKEN:-dummy_token}
+    volumes:
+      - ./otel/otel-collector-config.yaml:/etc/otel-collector-config.yaml
+    ports:
+      - "4317:4317"
+      - "4318:4318"
+    depends_on:
+      - temporal
+    networks:
+      - agent-net
+
+  gateway:
+    build:
+      context: ./gateway
+      dockerfile: Dockerfile
+    container_name: agent_gateway
+    environment:
+      - PORT=8080
+      - HOST=0.0.0.0
+      - PRESIDIO_ANALYZER_URL=http://presidio-analyzer:3000
+      - PRESIDIO_ANONYMIZER_URL=http://presidio-anonymizer:3000
+    ports:
+      - "8080:8080"
+    depends_on:
+      - presidio-analyzer
+      - presidio-anonymizer
+    networks:
+      - agent-net
+
+volumes:
+  pgdata:
+
+networks:
+  agent-net:
+    driver: bridge

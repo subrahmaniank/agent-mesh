@@ -1,0 +1,6 @@
+{
+  "project": "agent-mesh",
+  "mode": "agent-assisted",
+  "planPath": "implementation_plan.md",
+  "composeFiles": ["docker-compose.infra.yml"]
+}

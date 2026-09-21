@@ -1,0 +1,11 @@
+custom_recognizers:
+  - name: "INTERNAL_EMPLOYEE_ID"
+    supported_language: "en"
+    patterns:
+      - name: "emp_id_pattern"
+        regex: "EMP-[0-9]{6}"
+        score: 0.85
+    context:
+      - "employee"
+      - "staff"
+      - "badge"
