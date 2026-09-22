@@ -29,6 +29,37 @@
 config:
   adminAddr: "0.0.0.0:15000"
 
+  # ── Telemetry ──────────────────────────────────────────────────────────────
+  # The gateway is the only component that sees every call, so it is the only
+  # place token counts and cost can be collected once. Without this block it
+  # emits nothing and the OTel collector receives traces only from the Temporal
+  # workers — which was the case until now, despite the architecture diagram
+  # claiming otherwise.
+  #
+  # otlpProtocol accepts grpc | http. grpc here because the collector's gRPC
+  # receiver is on 4317; the collector then re-exports to Langfuse over HTTP,
+  # which is the only protocol Langfuse accepts.
+  tracing:
+    otlpEndpoint: "${OTEL_EXPORTER_OTLP_ENDPOINT}"
+    otlpProtocol: grpc
+    # A CEL expression, not a boolean flag. It defaults to null, which samples
+    # nothing — the endpoint is configured, the collector is reachable, and no
+    # span is ever emitted. `true` samples every request; use an expression to
+    # sample selectively once volume matters.
+    randomSampling: true
+
+  # ── Request log, for the admin UI's Analytics tab ──────────────────────────
+  # Separate from tracing and not a substitute for it: this is the gateway's own
+  # queryable request history. Without it the Analytics tab reports
+  # "request log database is not configured".
+  #
+  # Postgres rather than SQLite because the image runs as uid 65532 and a named
+  # volume would be mounted root-owned, leaving the process unable to create the
+  # file. The stack already runs Postgres for Temporal; this is a second,
+  # separate instance so a request-log rewrite cannot disturb workflow history.
+  database:
+    url: "${AGENTGATEWAY_DATABASE_URL}"
+
 llm:
   # Policies shared by every backend below. Declaring them once is what stops a
   # newly added provider from quietly bypassing the controls.

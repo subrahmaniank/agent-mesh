@@ -88,6 +88,15 @@ Since the last revision:
   conformant OpenAI clients. Policy `06-list-models` grants it to `model-user`;
   unapproved agents are still denied. Note that it returns the gateway's routing
   *patterns* (`gpt-*`, `*`), not concrete model names.
+- **The gateway now emits telemetry at all.** `config.tracing` was never set, so
+  despite the architecture diagram the collector only ever received traces from
+  the Temporal workers. Fixed — and `randomSampling` had to be set explicitly,
+  because it defaults to sampling nothing.
+- **Token and cost accounting is queryable.** `config.database` plus an
+  `agentgateway-postgres` service back the admin UI's Analytics tab, which
+  previously errored with "request log database is not configured". Usage
+  attributes to the Cedar principal (`agentgateway_user`), and prompt bodies are
+  not stored.
 - **The JWT issuer is a development one.** `scripts/agent_token.py` mints
   Ed25519-signed tokens from a local key. In production the JWKS comes from your
   IdP and tokens from the registry's approval step; only `jwtAuth.jwks.file`

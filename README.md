@@ -33,7 +33,8 @@ authorizes with Cedar, screens for PII, and records tokens and cost.
                │                  Gemini · Groq · Mistral · Ollama · vLLM · …
                ├─ 5. guardrails   same checks over the response
                └─ 6. telemetry    OTel ─▶ collector (ZDR) ─▶ Langfuse :3000
-                                          tokens + cost per session
+                                  request log ─▶ postgres ─▶ Analytics tab
+                                          tokens + cost per agent
 
   Agent Control :8000 (UI :4001)  step-level controls inside the agent
   Temporal :7233 (UI :8233)       durable orchestration, sagas, HITL gates

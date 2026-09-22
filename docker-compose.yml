@@ -31,6 +31,11 @@ services:
     environment:
       # Where Ollama actually runs — another machine, this Docker host, or the
       # optional in-compose service below. Full URL with scheme and /v1.
+      # Telemetry. The collector strips prompt bodies before forwarding, so
+      # token counts and cost survive while the content does not.
+      - OTEL_EXPORTER_OTLP_ENDPOINT=${GATEWAY_OTLP_ENDPOINT:-http://otel-collector:4317}
+      # Request log for the admin UI's Analytics tab.
+      - AGENTGATEWAY_DATABASE_URL=${AGENTGATEWAY_DATABASE_URL:-postgres://agentgateway:agentgateway@agentgateway-postgres:5432/agentgateway}
       - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-http://host.docker.internal:11434/v1}
       # Provider credentials. Absent ones simply leave that backend unusable;
       # the Ollama backend needs none of them.
@@ -47,11 +52,36 @@ services:
       - "${GATEWAY_ADMIN_PORT:-15000}:15000"  # admin UI
     depends_on:
       # Not ollama: it may be on another machine, and is opt-in here.
-      - cedar-shim
-      - presidio-adapter
+      # Long form throughout: compose rejects a depends_on that mixes the list
+      # and mapping styles.
+      cedar-shim:
+        condition: service_started
+      presidio-adapter:
+        condition: service_started
+      agentgateway-postgres:
+        condition: service_healthy
     extra_hosts:
       # Lets OLLAMA_BASE_URL reach a server on the Docker host itself.
       - "host.docker.internal:host-gateway"
+    networks: [agentmesh]
+
+  # Request-log store behind the admin UI's Analytics tab. Deliberately a
+  # separate instance from temporal-postgres: an exploding request log should
+  # not be able to fill the volume holding workflow history.
+  agentgateway-postgres:
+    image: postgres:16-alpine
+    container_name: agentmesh_gateway_postgres
+    environment:
+      - POSTGRES_USER=agentgateway
+      - POSTGRES_PASSWORD=agentgateway
+      - POSTGRES_DB=agentgateway
+    volumes:
+      - gateway-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U agentgateway"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
     networks: [agentmesh]
 
   # ─────────────────────────────────────────────────────────────────────
@@ -309,6 +339,7 @@ services:
 
 volumes:
   temporal-pgdata:
+  gateway-pgdata:
   ollama-models:
 
 networks:

@@ -59,6 +59,10 @@ docker exec agentmesh_ollama ollama pull llama3
 | Temporal | http://localhost:8233 | Workflows and sagas |
 | cedar-agent | http://localhost:8180 | Cedar PDP (`/rapidoc` for its API explorer) |
 
+The admin UI's **Analytics** tab is backed by `agentgateway-postgres`, which
+starts with the rest of the stack — see
+[Observability](observability.md#the-request-log-and-the-analytics-tab).
+
 ### Started by `./scripts/up-vendor-stacks.sh`
 
 These three publish their own compose files and are deliberately not copied into
@@ -225,6 +229,8 @@ uv run pytest tests/ -q          # 52 passing, no Docker needed
 | Ordinary prompts rejected as PII | `PRESIDIO_ENTITIES` empty means *every* entity; spaCy tags "France" as `LOCATION` | keep the curated default list |
 | `presidio-analyzer` exits code 3 | its registry YAML replaces the defaults and needs a top-level `recognizers:` key | see the header of `presidio/conf/recognizers.yaml` |
 | `http://localhost:15000` hangs or returns nothing | the admin UI binds `127.0.0.1` inside the container by default, so the published port maps to nothing | `config.adminAddr: "0.0.0.0:15000"` in `agentgateway/config.yaml` — already set |
+| `Analytics API error: request log database is not configured` | `config.database` unset, or `agentgateway-postgres` not healthy | `docker compose ps agentgateway-postgres`; the gateway creates its own schema on connect |
+| Traces configured but nothing reaches the collector | `config.tracing.randomSampling` defaults to `null`, which samples nothing | set it to `true` |
 | agentregistry / Agent Control / Langfuse blank | they are not started by `docker compose up -d` | `./scripts/up-vendor-stacks.sh`, and see the note about blocked downloads above |
 | otel-collector won't start on an unset variable | older collectors can't expand `${env:VAR:-default}` | already fixed by pinning 0.119.0 |
 
