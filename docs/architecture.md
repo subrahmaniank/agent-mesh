@@ -21,23 +21,30 @@ and whichever **LLM providers** are configured.
 ```
  developer                 operator                       platform
  ─────────                 ────────                       ────────
- arctl publish  ──▶  agentregistry
-                     · version, publisher verification
-                     · enrichment score
-                     · APPROVAL WORKFLOW ──▶ approved artifact
-                                                   │
-                     grant roles                   ▼
-                     PUT /v1/data          cedar-agent
-                     PUT /v1/policies      · principal = agent identity
-                                           · action    = call_model | call_tool
+ arctl publish  ┄┄▶  agentregistry                    (optional — not running
+                     · version, publisher verification     on this deployment)
+                     · APPROVAL WORKFLOW ┄┄▶ approved artifact
+                                                   ┆
+                     register principal             ▼
+                     + model resources      cedar-agent
+                     cedar/entities.json    · principal = agent identity
+                     cedar/policies/*.cedar · action    = call_model
+                       ──▶ cedar-loader                  | call_tool
+                                           ·             | list_models
                                            · resource  = model | tool
-                                                   │
+                                                   │        | platform
                      issue credential ──▶ agentgateway
+                       agent_token.py       (JWT `sub` = the principal id)
                      add MCP servers  ──▶ agentgateway mcp.targets
 ```
 
-The registry is the source of truth for what is approved; Cedar entity data is
-derived from it. Nothing else creates a usable identity.
+Solid arrows are what runs today; the dashed registry path is the intended
+source of truth for `registry_status` once agentregistry is up. Until then the
+attribute is set by hand, and **Cedar is what creates a usable identity** —
+without a principal and a matching credential, an agent gets nothing.
+
+The step-by-step procedure is
+[Onboarding an agent](agent-onboarding-guide.md).
 
 ## Runtime — one call, end to end
 

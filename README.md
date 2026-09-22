@@ -91,8 +91,8 @@ is the choke point. Every row below was **observed against the running stack**:
 | `pii-handler` asking for a hosted model | `403` — pinned to local tier |
 | Agent asking for an unregistered model name | `403` — Cedar has no such resource |
 | **Forged `x-agentmesh-agent` header** | **ignored** — see below |
-| Prompt with an SSN | masked inline, call proceeds |
-| Prompt with a person + address | `403 content contains PERSON` |
+| Prompt with an SSN | masked inline — the model receives `<SSN>` |
+| Prompt with an IBAN | `403 content contains IBAN_CODE` |
 
 The forgery case is the one that matters. agentgateway forwards **only**
 `authorization` and `host` to an HTTP extAuthz endpoint — a client's own headers
@@ -128,7 +128,7 @@ docker compose up -d          # gateway, cedar, presidio, temporal, otel
 #   OLLAMA_BASE_URL=http://ollama:11434/v1
 
 TOKEN=$(python3 scripts/agent_token.py issue research-assistant)
-curl -X POST localhost:4000/v1/chat/completions \
+curl -X POST localhost:${GATEWAY_PORT:-4000}/v1/chat/completions \
   -H 'Content-Type: application/json' \
   -H "Authorization: Bearer $TOKEN" \
   -d '{"model":"llama3","messages":[{"role":"user","content":"hello"}]}'
@@ -151,6 +151,28 @@ building — see [`certs/README.md`](certs/README.md).
 | Temporal | http://localhost:8233 |
 
 Full walkthrough: [`docs/getting-started.md`](docs/getting-started.md).
+
+## Onboarding an agent
+
+Bringing your own agent onto the platform — any framework, or none — is four
+things on the platform side and three settings on yours:
+
+```bash
+# platform: register the principal in cedar/entities.json, register the model
+#           names it sends, reload, issue a credential
+docker compose restart cedar-loader
+TOKEN=$(python3 scripts/agent_token.py issue my-first-agent --ttl 604800)
+
+# your agent: point it at the gateway
+#   base_url = http://localhost:${GATEWAY_PORT:-4000}/v1
+#   api_key  = $TOKEN          (not a provider key)
+#   model    = a registered model name
+```
+
+Your agent's code does not change — it already speaks OpenAI-compatible HTTP.
+The step-by-step procedure, with verification and a failure catalogue, is
+[`docs/agent-onboarding-guide.md`](docs/agent-onboarding-guide.md); per-framework
+wiring is [`docs/framework-integrations.md`](docs/framework-integrations.md).
 
 ## Repository layout
 
@@ -181,7 +203,7 @@ agent → JWT authn → Cedar → regex mask → Presidio NER → Ollama → com
 ```
 
 A prompt containing an SSN was masked in flight and still returned a completion
-with `usage.total_tokens`; a prompt naming a person was rejected before egress.
+with `usage.total_tokens`; a prompt containing an IBAN was rejected before egress.
 The full authorization matrix is the table above — every row observed, not
 inferred.
 
@@ -209,11 +231,11 @@ docker run --rm -v ./agentgateway:/c:ro cr.agentgateway.dev/agentgateway:v1.5.0 
 
 ### Without Docker
 
-`uv run pytest tests/ -q` → **46 passing**:
+`uv run pytest tests/ -q` → **52 passing**:
 
 | Suite | Proves |
 |---|---|
-| `tests/cedar/` (13) | The shipped Cedar policies under the real engine: unapproved agents denied, `pii-handler` confined to local models, clearance enforced, the HITL gate flipping deny→allow, tenant isolation, and **zero policy evaluation errors** — Cedar silently skips a rule that raises, so a malformed policy would otherwise vanish unnoticed |
+| `tests/cedar/` (19) | The shipped Cedar policies under the real engine: unapproved agents denied, `pii-handler` confined to local models, clearance enforced, the HITL gate flipping deny→allow, tenant isolation, and **zero policy evaluation errors** — Cedar silently skips a rule that raises, so a malformed policy would otherwise vanish unnoticed |
 | `tests/adapters/test_cedar_shim.py` (14) | A Cedar `Deny` returned with HTTP 200 becomes a **403** — without this translation every request would be allowed; plus fail-closed on an unreachable PDP, and that an agent cannot self-approve via headers or body |
 | `tests/adapters/test_presidio_adapter.py` (11) | The agentgateway webhook contract, NER-only entities caught where regex would miss, and **fail-closed when Presidio is down** |
 | `tests/workflows/` (8) | Temporal saga: LIFO compensation, policy denials not retried, partial-compensation recovery, approval signal, SLA timeout |
@@ -232,6 +254,6 @@ through Cedar, not through a real MCP server.
 | [Architecture](docs/architecture.md) | The five planes, request walkthrough, admission control |
 | [Security & governance](docs/security-and-governance.md) | Cedar IAM, the two PII layers and their limits, fail-closed behaviour |
 | [Getting started](docs/getting-started.md) | Setup, first run, verification |
-| [Agent onboarding](docs/agent-onboarding-guide.md) | Publish, approve, grant roles, issue a credential |
+| [Agent onboarding](docs/agent-onboarding-guide.md) | **Start here to bring an agent on.** Register, grant, credential, verify, operate |
 | [Observability](docs/observability.md) | Langfuse wiring, tokens and cost |
 | [Orchestration & HITL](docs/orchestration-and-hitl.md) | Temporal workflows and approval gates |

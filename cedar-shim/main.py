@@ -54,6 +54,14 @@ def classify(path: str, body: dict):
     cannot be classified -- which is a denial, not a pass-through.
     """
     p = path.lower()
+    # Model discovery. OpenAI-compatible clients probe this before a call, and
+    # leaving it unclassified denied them a standard endpoint. It is authorized
+    # like anything else rather than waved through: policy 06 grants it to
+    # model-user, policy 01 still denies an unapproved agent, and policy 02
+    # still requires a tenant match -- so the catalogue is not readable by
+    # something that may not use it.
+    if p.rstrip("/").endswith("/models"):
+        return "list_models", "Platform", "gateway"
     if "/chat/completions" in p or "/v1/messages" in p or "/completions" in p:
         model = body.get("model")
         if isinstance(model, str) and model:

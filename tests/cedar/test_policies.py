@@ -33,7 +33,7 @@ ENTITIES = [
     for e in _raw
 ]
 
-RESOURCE_TYPE = {"call_model": "Model", "call_tool": "Tool"}
+RESOURCE_TYPE = {"call_model": "Model", "call_tool": "Tool", "list_models": "Platform"}
 
 
 def decide(agent: str, action: str, resource: str, hitl_approved: bool = False):
@@ -174,3 +174,24 @@ def test_crewai_sample_has_no_tool_role():
     """The crew attaches no tools; custom_tool.py is an unused scaffold. Grant
     `tool-user` when one is actually wired, not before."""
     assert allow("crewai-sample-01", "call_tool", "search_docs") == "Deny"
+
+
+# --- model discovery ----------------------------------------------------------
+
+def test_approved_agent_may_list_models():
+    """GET /v1/models is a standard OpenAI endpoint that clients probe before
+    calling. It is authorized rather than waved through, but it must succeed for
+    an agent that is allowed to call models at all."""
+    assert allow("research-assistant", "list_models", "gateway") == "Allow"
+
+
+def test_unapproved_agent_may_not_list_models():
+    """Discovery is still discovery: an agent the registry has not approved does
+    not get to read the catalogue of what it cannot call."""
+    assert allow("unapproved-agent", "list_models", "gateway") == "Deny"
+
+
+def test_listing_models_requires_the_model_user_role():
+    """`orchestrator` holds model-user so it may list; the grant is by role, not
+    by being approved. A tool-only agent has no reason to enumerate models."""
+    assert allow("orchestrator", "list_models", "gateway") == "Allow"

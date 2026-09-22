@@ -217,5 +217,16 @@
       "_comment": "CrewAI research crew at ~/Developer/samples/crewai_sample_01. Local tier only: a sequential crew feeds each task's output into the next task's prompt, so research context accumulates in the request body -- fine on-premises, not something to hand a hosted provider. `tool-user` is deliberately absent: the crew attaches no tools yet."
     },
     "parents": []
+  },
+  {
+    "uid": {
+      "type": "AgentMesh::Platform",
+      "id": "gateway"
+    },
+    "attrs": {
+      "tenant": "acme",
+      "_comment": "Resource for GET /v1/models. The `tenant` attribute is required, not decorative: policy 02 is `forbid unless principal.tenant == resource.tenant`, so a resource without one denies every principal. A second tenant needs its own Platform entity."
+    },
+    "parents": []
   }
 ]

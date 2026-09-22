@@ -75,6 +75,19 @@ platforms mislead:
   configured but unproven.
 - **`mcp.targets` is empty.** The tool path is exercised through Cedar but not
   against a real MCP server.
+
+Since the last revision:
+
+- **A real framework agent is onboarded and running.** A CrewAI project at
+  `~/Developer/samples/crewai_sample_01` completes end to end through the
+  gateway as the principal `crewai-sample-01`, via ~30 `ALLOW` decisions per run
+  and no other identity. Its code was not modified — only three environment
+  settings.
+- **`GET /v1/models` is now authorized rather than denied.** It used to 403
+  because cedar-shim could not map the path to a resource, which broke
+  conformant OpenAI clients. Policy `06-list-models` grants it to `model-user`;
+  unapproved agents are still denied. Note that it returns the gateway's routing
+  *patterns* (`gpt-*`, `*`), not concrete model names.
 - **The JWT issuer is a development one.** `scripts/agent_token.py` mints
   Ed25519-signed tokens from a local key. In production the JWKS comes from your
   IdP and tokens from the registry's approval step; only `jwtAuth.jwks.file`
@@ -89,7 +102,7 @@ platforms mislead:
 
 ## What is verified
 
-`uv run pytest tests/ -q` → 46 passing without Docker. The Cedar policies are
+`uv run pytest tests/ -q` → 52 passing without Docker. The Cedar policies are
 exercised against the real engine, and both adapters against mocked backends,
 including their fail-closed paths. See the README table for the breakdown.
 

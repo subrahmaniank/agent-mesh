@@ -51,7 +51,7 @@ exist as a Cedar principal with the roles it needs. Add it to
 then reload:
 
 ```bash
-docker compose up cedar-loader
+docker compose restart cedar-loader
 ```
 
 `allowed_model_tiers` is the lever for keeping an agent on-premises: an agent

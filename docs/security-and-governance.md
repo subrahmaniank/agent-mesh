@@ -15,7 +15,7 @@ Cedar is **deny-by-default**: an agent gets nothing unless a `permit` matches,
 and any `forbid` overrides every `permit`. That property is what turns the
 registry from a list into enforcement.
 
-### The five policies
+### The six policies
 
 | # | Rule | Effect |
 |---|---|---|
@@ -24,6 +24,7 @@ registry from a list into enforcement.
 | 3 | `permit` when role `model-user` **and** the model's tier is in `allowed_model_tiers` | Model access by tier |
 | 4 | `permit` when role `tool-user` **and** `clearance >= resource.risk_score` | Tool access by clearance |
 | 5 | `forbid` destructive tools unless `context.hitl_approved` | Human approval gate |
+| 6 | `permit` `list_models` when role `model-user` | Model discovery — `GET /v1/models`, which OpenAI-compatible clients probe. Authorized rather than waved through: policies 1 and 2 still apply, so an unapproved or wrong-tenant agent cannot even enumerate |
 
 ### Keeping an agent on-premises
 
@@ -31,6 +32,29 @@ registry from a list into enforcement.
 only `local`, so it can use the on-premises Ollama backend and is denied every
 hosted provider — regardless of which model name it asks for. Changing that is a
 policy edit, not a code change.
+
+### Revocation: authority, not credentials
+
+There is **no token blacklist**. A JWT is self-contained; once issued it keeps
+authenticating until `exp` passes, and neither deleting a file nor restarting the
+gateway invalidates it.
+
+What stops an agent is removing its *authority*. Set `registry_status` to
+anything but `"approved"` — or delete the entity outright — and reload:
+
+```bash
+docker compose restart cedar-loader
+```
+
+Policy 1 then denies every action for that principal. The token still
+authenticates and authorizes nothing, which is the correct outcome: the audit
+trail still attributes the attempts.
+
+Rotating the signing key (`scripts/agent_token.py init --force`) invalidates
+**every** token for **every** agent at once. That is the response to a
+compromised signing key, not to a compromised agent.
+
+Keep TTLs short enough that a forgotten revocation expires on its own.
 
 ### The approval flag cannot be forged
 
@@ -49,7 +73,7 @@ agent naming a workflow it never got approved gains nothing.
 ```bash
 vim cedar/policies.cedar cedar/entities.json
 uv run pytest tests/cedar/ -q      # verify before loading
-docker compose up cedar-loader     # reload into cedar-agent
+docker compose restart cedar-loader     # reload into cedar-agent
 ```
 
 Run the tests first. Cedar **skips a policy that raises at evaluation time**
@@ -72,9 +96,12 @@ delivers that.
 | Agent Control controls | `deny` / `steer` / `observe` | **No** |
 
 So: regex masks well-formed patterns (SSN, card, email) inline, and Presidio
-**rejects** anything its NER catches that regex missed — a person's name, an
-address, a custom entity. Rejection, not redaction, is what "never sent"
-actually requires.
+**rejects** the identifiers its NER catches that regex missed — an IBAN, a
+medical licence number, an IP address, a custom entity. Rejection, not
+redaction, is what "never sent" actually requires.
+
+It does **not** reject a person's name; `PERSON` is excluded from
+`PRESIDIO_ENTITIES` for the reason given below.
 
 Three things worth knowing:
 

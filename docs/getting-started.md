@@ -53,7 +53,7 @@ docker exec agentmesh_ollama ollama pull llama3
 | Service | URL | What it is |
 |---|---|---|
 | agentgateway admin + playground | http://localhost:15000 | Gateway config, LLM playground |
-| agentgateway API | http://localhost:4000 | OpenAI-compatible endpoint |
+| agentgateway API | `$GATEWAY` (4000 default, 4100 here) | OpenAI-compatible endpoint |
 | agentregistry | http://localhost:12121 | Catalogue and approvals |
 | Agent Control | http://localhost:4001 | Controls dashboard (API `:8000`) |
 | Langfuse | http://localhost:3000 | Traces, tokens, cost |
@@ -65,6 +65,12 @@ docker exec agentmesh_ollama ollama pull llama3
 > other local stacks; when one clashes you get
 > `Bind for 0.0.0.0:4317 failed: port is already allocated`. Find the holder
 > with `ss -lntp | grep :4317`.
+>
+> The commands below use `$GATEWAY` so they work whatever you set:
+>
+> ```bash
+> export GATEWAY=http://localhost:${GATEWAY_PORT:-4000}
+> ```
 
 ## 3. Issue a credential
 
@@ -84,7 +90,7 @@ this is your IdP's JWKS instead; only `jwtAuth.jwks.file` changes.
 ## 4. First call
 
 ```bash
-curl -X POST localhost:4000/v1/chat/completions \
+curl -X POST $GATEWAY/v1/chat/completions \
   -H 'Content-Type: application/json' \
   -H "Authorization: Bearer $TOKEN" \
   -d '{"model":"llama3","messages":[{"role":"user","content":"Say hello."}]}'
@@ -131,7 +137,7 @@ gateway from the validated token via a CEL expression
 
 ```bash
 PH=$(python3 scripts/agent_token.py issue pii-handler)
-curl -X POST localhost:4000/v1/chat/completions \
+curl -X POST $GATEWAY/v1/chat/completions \
   -H "Authorization: Bearer $PH" \
   -H 'x-agentmesh-agent: research-assistant' \
   -H 'Content-Type: application/json' \
@@ -175,7 +181,7 @@ trace. `otel/otel-collector-config.yaml` is already configured correctly.
 ```bash
 uv venv --python 3.12 .venv && source .venv/bin/activate
 uv pip install -r tests/requirements-test.txt -r orchestrator/requirements.txt
-uv run pytest tests/ -q          # 46 passing, no Docker needed
+uv run pytest tests/ -q          # 52 passing, no Docker needed
 ```
 
 ---
@@ -191,6 +197,8 @@ uv run pytest tests/ -q          # 46 passing, no Docker needed
 | Gateway exits with `data did not match any variant of untagged enum ...` | a config shape is wrong | `--validate-only` names the field and lists the accepted values |
 | `cedar-loader` exits non-zero with HTTP 400 | a `.cedar` file holds more than one statement | one statement per file in `cedar/policies/` |
 | Every request 403s with `cedar:deny []` | the model or agent is not a registered Cedar entity | add it to `cedar/entities.json`, re-run the loader |
+| `403` on a model that exists | the model name is not a registered Cedar resource — `gemma4` and `gemma4:latest` differ | read `resource=` in `docker compose logs cedar-shim` and register that exact string |
+| `503 upstream call failed` | authorization passed; the backend is unreachable | this is the platform working — fix the model backend |
 | Ordinary prompts rejected as PII | `PRESIDIO_ENTITIES` empty means *every* entity; spaCy tags "France" as `LOCATION` | keep the curated default list |
 | `presidio-analyzer` exits code 3 | its registry YAML replaces the defaults and needs a top-level `recognizers:` key | see the header of `presidio/conf/recognizers.yaml` |
 | otel-collector won't start on an unset variable | older collectors can't expand `${env:VAR:-default}` | already fixed by pinning 0.119.0 |
@@ -202,32 +210,52 @@ RA=$(python3 scripts/agent_token.py issue research-assistant)
 PH=$(python3 scripts/agent_token.py issue pii-handler)
 UN=$(python3 scripts/agent_token.py issue unapproved-agent)
 
-ask() { curl -s -o /dev/null -w "%{http_code}\n" -X POST localhost:4000/v1/chat/completions \
+ask() { curl -s -o /dev/null -w "%{http_code}\n" -X POST $GATEWAY/v1/chat/completions \
   -H 'Content-Type: application/json' -H "Authorization: Bearer $1" \
   -d "{\"model\":\"$2\",\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}]}"; }
 
-ask "$RA" llama3:latest   # 200 — permitted
+ask "$RA" llama3:latest   # 200 — permitted (503 also passes: see below)
 ask "$PH" gpt-4.1         # 403 — pinned to the local tier
 ask "$UN" llama3:latest   # 403 — 01-registry-admission
-curl -s -o /dev/null -w "%{http_code}\n" -X POST localhost:4000/v1/chat/completions \
+curl -s -o /dev/null -w "%{http_code}\n" -X POST $GATEWAY/v1/chat/completions \
   -H 'Content-Type: application/json' -d '{"model":"llama3","messages":[]}'   # 401
 ```
+
+A **503** on the first line is also a pass. It means every control allowed the
+call and the model backend was unreachable — check for
+`cedar:allow` in `docker compose logs cedar-shim`.
 
 Then the guardrails:
 
 ```bash
-# masked inline by the regex layer, call still succeeds
-curl -s -X POST localhost:4000/v1/chat/completions -H 'Content-Type: application/json' \
+# masked inline by the regex layer — the call succeeds and the model never sees it
+curl -s -X POST $GATEWAY/v1/chat/completions -H 'Content-Type: application/json' \
   -H "Authorization: Bearer $RA" \
-  -d '{"model":"llama3:latest","messages":[{"role":"user","content":"My SSN is 123-45-6789"}]}'
+  -d '{"model":"llama3:latest","messages":[{"role":"user",
+       "content":"Repeat exactly: my SSN is 123-45-6789"}]}'
+# -> the completion echoes "<SSN>", not the digits
 
-# rejected by Presidio NER before egress
-curl -s -X POST localhost:4000/v1/chat/completions -H 'Content-Type: application/json' \
+# rejected by Presidio before egress
+curl -s -X POST $GATEWAY/v1/chat/completions -H 'Content-Type: application/json' \
   -H "Authorization: Bearer $RA" \
-  -d '{"model":"llama3:latest","messages":[{"role":"user","content":"Contact Michael Thompson at 4521 Oakwood Drive"}]}'
+  -d '{"model":"llama3:latest","messages":[{"role":"user",
+       "content":"Wire it to GB82WEST12345698765432 today"}]}'
+# -> 403 Request blocked: content contains IBAN_CODE.
 
 docker compose logs presidio-adapter | tail -3
 ```
+
+Note what is **not** rejected: a person's name. `PERSON` is deliberately absent
+from `PRESIDIO_ENTITIES` — see
+[Security & governance](security-and-governance.md#2-pii--two-layers-because-neither-alone-is-enough).
+Keeping an agent's data on-premises is Cedar's job, via `allowed_model_tiers`.
+
+## Bringing your own agent on
+
+Everything above is operator setup. To onboard an agent — register it, grant it
+policy, issue its credential and verify — follow
+[Onboarding an agent](agent-onboarding-guide.md). It is framework-neutral and
+self-contained.
 
 ## Still to exercise
 
