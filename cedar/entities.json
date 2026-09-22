@@ -1,81 +1,202 @@
 [
   {
-    "uid": { "type": "AgentMesh::Agent", "id": "research-assistant" },
+    "uid": {
+      "type": "AgentMesh::Agent",
+      "id": "research-assistant"
+    },
     "attrs": {
       "registry_status": "approved",
       "tenant": "acme",
       "clearance": 3,
-      "roles": ["model-user", "tool-user"],
-      "allowed_model_tiers": ["local", "hosted"]
+      "roles": [
+        "model-user",
+        "tool-user"
+      ],
+      "allowed_model_tiers": [
+        "local",
+        "hosted"
+      ]
     },
     "parents": []
   },
   {
-    "uid": { "type": "AgentMesh::Agent", "id": "pii-handler" },
+    "uid": {
+      "type": "AgentMesh::Agent",
+      "id": "pii-handler"
+    },
     "attrs": {
       "registry_status": "approved",
       "tenant": "acme",
       "clearance": 2,
-      "roles": ["model-user", "tool-user"],
-      "allowed_model_tiers": ["local"],
+      "roles": [
+        "model-user",
+        "tool-user"
+      ],
+      "allowed_model_tiers": [
+        "local"
+      ],
       "_comment": "Handles sensitive records, so it is pinned to on-premises models only."
     },
     "parents": []
   },
   {
-    "uid": { "type": "AgentMesh::Agent", "id": "ops-agent" },
+    "uid": {
+      "type": "AgentMesh::Agent",
+      "id": "ops-agent"
+    },
     "attrs": {
       "registry_status": "approved",
       "tenant": "acme",
       "clearance": 5,
-      "roles": ["model-user", "tool-user"],
-      "allowed_model_tiers": ["local", "hosted"],
+      "roles": [
+        "model-user",
+        "tool-user"
+      ],
+      "allowed_model_tiers": [
+        "local",
+        "hosted"
+      ],
       "_comment": "Clearance high enough to reach destructive tools, so the HITL gate is the only thing standing in the way -- which is what makes it testable."
     },
     "parents": []
   },
   {
-    "uid": { "type": "AgentMesh::Agent", "id": "unapproved-agent" },
+    "uid": {
+      "type": "AgentMesh::Agent",
+      "id": "unapproved-agent"
+    },
     "attrs": {
       "registry_status": "pending",
       "tenant": "acme",
       "clearance": 5,
-      "roles": ["model-user", "tool-user"],
-      "allowed_model_tiers": ["local", "hosted"],
+      "roles": [
+        "model-user",
+        "tool-user"
+      ],
+      "allowed_model_tiers": [
+        "local",
+        "hosted"
+      ],
       "_comment": "Published to the registry but not yet approved. High clearance is irrelevant: policy 1 denies everything."
     },
     "parents": []
   },
-
   {
-    "uid": { "type": "AgentMesh::Model", "id": "llama3" },
-    "attrs": { "provider": "ollama", "tier": "local", "tenant": "acme" },
+    "uid": {
+      "type": "AgentMesh::Model",
+      "id": "llama3"
+    },
+    "attrs": {
+      "provider": "ollama",
+      "tier": "local",
+      "tenant": "acme"
+    },
     "parents": []
   },
   {
-    "uid": { "type": "AgentMesh::Model", "id": "gpt-4.1" },
-    "attrs": { "provider": "openAI", "tier": "hosted", "tenant": "acme" },
+    "uid": {
+      "type": "AgentMesh::Model",
+      "id": "gpt-4.1"
+    },
+    "attrs": {
+      "provider": "openAI",
+      "tier": "hosted",
+      "tenant": "acme"
+    },
     "parents": []
   },
   {
-    "uid": { "type": "AgentMesh::Model", "id": "claude-opus-5" },
-    "attrs": { "provider": "azure", "tier": "hosted", "tenant": "acme" },
-    "parents": []
-  },
-
-  {
-    "uid": { "type": "AgentMesh::Tool", "id": "search_docs" },
-    "attrs": { "risk": "read", "risk_score": 1, "tenant": "acme" },
-    "parents": []
-  },
-  {
-    "uid": { "type": "AgentMesh::Tool", "id": "query_database" },
-    "attrs": { "risk": "read", "risk_score": 3, "tenant": "acme" },
+    "uid": {
+      "type": "AgentMesh::Model",
+      "id": "claude-opus-5"
+    },
+    "attrs": {
+      "provider": "azure",
+      "tier": "hosted",
+      "tenant": "acme"
+    },
     "parents": []
   },
   {
-    "uid": { "type": "AgentMesh::Tool", "id": "drop_table" },
-    "attrs": { "risk": "destructive", "risk_score": 5, "tenant": "acme" },
+    "uid": {
+      "type": "AgentMesh::Tool",
+      "id": "search_docs"
+    },
+    "attrs": {
+      "risk": "read",
+      "risk_score": 1,
+      "tenant": "acme"
+    },
+    "parents": []
+  },
+  {
+    "uid": {
+      "type": "AgentMesh::Tool",
+      "id": "query_database"
+    },
+    "attrs": {
+      "risk": "read",
+      "risk_score": 3,
+      "tenant": "acme"
+    },
+    "parents": []
+  },
+  {
+    "uid": {
+      "type": "AgentMesh::Tool",
+      "id": "drop_table"
+    },
+    "attrs": {
+      "risk": "destructive",
+      "risk_score": 5,
+      "tenant": "acme"
+    },
+    "parents": []
+  },
+  {
+    "uid": {
+      "type": "AgentMesh::Model",
+      "id": "gemma4:latest"
+    },
+    "attrs": {
+      "tier": "local",
+      "tenant": "acme",
+      "provider": "ollama",
+      "_comment": "Ollama tag as pulled. The id must match the `model` field a client sends, tag included \u2014 Cedar denies an unregistered model, which is how 'no model runs here unless it was approved' is enforced."
+    },
+    "parents": []
+  },
+  {
+    "uid": {
+      "type": "AgentMesh::Model",
+      "id": "llama3:latest"
+    },
+    "attrs": {
+      "tier": "local",
+      "tenant": "acme",
+      "provider": "ollama",
+      "_comment": "Registered alongside the bare `llama3` above so either spelling resolves."
+    },
+    "parents": []
+  },
+  {
+    "uid": {
+      "type": "AgentMesh::Agent",
+      "id": "orchestrator"
+    },
+    "attrs": {
+      "registry_status": "approved",
+      "tenant": "acme",
+      "roles": [
+        "model-user",
+        "tool-user"
+      ],
+      "clearance": 3,
+      "allowed_model_tiers": [
+        "local"
+      ],
+      "_comment": "The Temporal workers' own identity. Local models only: the control plane should not be the thing that reaches a cloud provider."
+    },
     "parents": []
   }
 ]

@@ -2,6 +2,12 @@
 
 What this repo is today, what it replaced, and what is not yet wired.
 
+The stack now runs: `docker compose up -d` brings up 13 services and a request
+has been served through authn → Cedar → guardrails → Ollama → completion. The
+configuration shapes that were previously inferred were validated against the
+agentgateway binary, and several were wrong — see
+[What is verified](../README.md#what-is-verified).
+
 ---
 
 ## What it replaced
@@ -63,30 +69,23 @@ Everything else is YAML, JSON and vendor UIs.
 Being explicit, because the gap between "configured" and "working" is where
 platforms mislead:
 
-- **Nothing has been started.** No Docker daemon was available. Every container,
-  port and config shape below is unexercised.
-- **`agentgateway/config.yaml` is partly inferred.** Entries marked `[check]` —
-  the regex-guard field names, the Ollama param name, `mcp.targets` shape, the
-  `ui` block, and where `extAuthz` attaches relative to `llm` — need validating
-  against the schema at `https://agentgateway.dev/schema/config`.
-- **The webhook mask question is unresolved.** agentgateway's guardrails
-  overview lists webhook actions as *reject, audit*; its Guardrail Webhook API
-  describes *Pass, Mask, Reject*. The adapter therefore defaults to `reject`,
-  which satisfies "PII must never be sent" under either reading. Set
-  `GUARDRAIL_ACTION=mask` only after confirming.
-- **cedar-agent's policy wire format is unconfirmed.** `scripts/load-cedar.sh`
-  submits the policy file as one named document and prints every response, so a
-  mismatch is loud. A failed load leaves an empty policy set — which, with
-  Cedar's deny-by-default, blocks everything rather than allowing it.
-- **Registry → Cedar is a manual copy.** `registry_status` in
-  `cedar/entities.json` is maintained by hand. Deriving entities from the
-  registry API would remove the drift.
-- **Agent Control needs SDK integration.** Its controls only fire around
-  `@control()`-decorated functions inside agent code; it has no proxy mode.
-- **`GATEWAY_TOKEN` → agent identity is unconfigured.** cedar-shim reads the
-  identity from a header agentgateway is expected to populate after authn. If a
-  client can set that header itself, the authorization model collapses — this is
-  the single most important thing to verify on first run.
+- **The three vendor stacks are unstarted.** agentregistry, Agent Control and
+  Langfuse come up via `scripts/up-vendor-stacks.sh` and have not been run, so
+  the registry → Cedar identity hand-off and the per-session token/cost view are
+  configured but unproven.
+- **`mcp.targets` is empty.** The tool path is exercised through Cedar but not
+  against a real MCP server.
+- **The JWT issuer is a development one.** `scripts/agent_token.py` mints
+  Ed25519-signed tokens from a local key. In production the JWKS comes from your
+  IdP and tokens from the registry's approval step; only `jwtAuth.jwks.file`
+  changes.
+- **Cloud-provider egress is untested behind the corporate proxy.** It fails
+  with `invalid peer certificate: UnknownIssuer` until a model entry carries
+  `backendTLS.root`.
+- **The webhook cannot mask — resolved by probing the binary.** agentgateway's
+  guardrails overview and its Webhook API page disagreed; v1.5.0 accepts only
+  `reject` or `audit`. `GUARDRAIL_ACTION=mask` therefore does nothing here, and
+  masking is handled entirely by the regex layer.
 
 ## What is verified
 

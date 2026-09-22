@@ -64,13 +64,28 @@ failing the request, so a malformed rule vanishes instead of announcing itself.
 
 ## 4. Issue a gateway credential
 
-The agent authenticates to agentgateway with a bearer token; agentgateway maps
-that to the agent identity Cedar authorizes. The agent never asserts its own
-identity.
+The credential is a signed JWT whose `sub` claim is the agent id from step 1 —
+the same string Cedar knows as the principal:
 
 ```bash
-GATEWAY_TOKEN=<issued-token>
+python3 scripts/agent_token.py init          # once per machine
+docker compose restart agentgateway          # pick up the JWKS
+
+AGENT_TOKEN=$(python3 scripts/agent_token.py issue research-assistant)
 ```
+
+The agent never asserts its own identity, and cannot. agentgateway validates the
+signature, then injects `x-agentmesh-agent: jwt.sub` on the authorization call;
+a client's own headers are not forwarded to extAuthz at all. Handing an agent a
+token for a different `sub` is the only way to change who it is — which is the
+point, because minting tokens is an operator action.
+
+In production, replace the dev issuer with your IdP: point `jwtAuth.jwks.file`
+at its key set. Nothing else in the config changes.
+
+Also register the **model names** the agent will ask for, exactly as sent —
+`gemma4:latest`, not `gemma4`. An unregistered model is denied the same way an
+unapproved agent is.
 
 ---
 
@@ -83,7 +98,7 @@ import httpx
 
 r = httpx.post(
     "http://localhost:4000/v1/chat/completions",
-    headers={"Authorization": f"Bearer {GATEWAY_TOKEN}"},
+    headers={"Authorization": f"Bearer {AGENT_TOKEN}"},
     json={"model": "llama3", "messages": [{"role": "user", "content": "..."}]},
 )
 if r.status_code in (401, 403):

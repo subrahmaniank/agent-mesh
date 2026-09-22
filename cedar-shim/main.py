@@ -34,6 +34,12 @@ HITL_WORKFLOW_HEADER = os.getenv("HITL_WORKFLOW_HEADER", "x-agentmesh-hitl-workf
 TEMPORAL_HOST = os.getenv("TEMPORAL_HOST", "")
 TEMPORAL_NAMESPACE = os.getenv("TEMPORAL_NAMESPACE", "default")
 MAX_BODY = 1 * 1024 * 1024
+# Log the headers agentgateway actually forwards to this endpoint. agentgateway
+# does NOT pass the client's headers through to extAuthz — which is what makes
+# the identity header unforgeable, and also what makes "why is my agent id
+# missing?" hard to diagnose blind. Set SHIM_DEBUG_HEADERS=1 to see the real
+# set. Off by default: the Authorization header can appear here.
+DEBUG_HEADERS = os.getenv("SHIM_DEBUG_HEADERS", "") == "1"
 
 NS = "AgentMesh"
 
@@ -138,6 +144,9 @@ class Handler(BaseHTTPRequestHandler):
 
     def _authorize(self):
         body = self._read_body()
+        if DEBUG_HEADERS:
+            log.info("headers %s=%s body=%s", self.command, self.path,
+                     json.dumps(dict(self.headers.items()))[:2000])
         principal = (self.headers.get(AGENT_ID_HEADER) or "").strip()
         if not principal:
             log.info("DENY path=%s reason=no-agent-identity", self.path)

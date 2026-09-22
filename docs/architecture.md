@@ -47,8 +47,12 @@ agent
   │  Authorization: Bearer <credential>
   ▼
 agentgateway
-  1. AUTHN       JWT / API key                        → 401 if absent or invalid
+  1. AUTHN       jwtAuth, mode: strict                → 401 if absent or invalid
+                 the token's `sub` IS the agent identity
   2. AUTHZ       extAuthz(HTTP) → cedar-shim
+                    gateway forwards ONLY `authorization` + `host`, and
+                    injects  x-agentmesh-agent: jwt.sub  (a CEL expression)
+                    — so a client-set identity header never arrives
                     → cedar-agent POST /v1/is_authorized
                     → {"decision":"Allow"|"Deny"}     → shim maps to 200 | 403
   3. GUARDRAILS  a. regex prompt guards — mask SSN / card / email inline

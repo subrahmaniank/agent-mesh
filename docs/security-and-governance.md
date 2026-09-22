@@ -68,7 +68,7 @@ delivers that.
 | Layer | Mechanism | Can it redact? |
 |---|---|---|
 | agentgateway **regex** prompt guards | built-in patterns, inline | **Yes** — `mask`, the only native masking anywhere in the stack |
-| agentgateway **webhook** → presidio-adapter | Presidio NER | **Reject/audit** — mask support is contested |
+| agentgateway **webhook** → presidio-adapter | Presidio NER | **No** — `reject` or `audit` only |
 | Agent Control controls | `deny` / `steer` / `observe` | **No** |
 
 So: regex masks well-formed patterns (SSN, card, email) inline, and Presidio
@@ -76,13 +76,31 @@ So: regex masks well-formed patterns (SSN, card, email) inline, and Presidio
 address, a custom entity. Rejection, not redaction, is what "never sent"
 actually requires.
 
-Two limits worth knowing:
+Three things worth knowing:
 
-- **`mask` never applies to streamed responses.** Streaming must reject.
-- **The webhook mask question is unresolved.** agentgateway's guardrails
-  overview lists webhook actions as *reject, audit*; its Guardrail Webhook API
-  describes *Pass, Mask, Reject*. `GUARDRAIL_ACTION` therefore defaults to
-  `reject`, which is correct under either reading. Confirm before setting `mask`.
+- **The webhook cannot mask — settled.** agentgateway's guardrails overview
+  lists webhook actions as *reject, audit*; its Guardrail Webhook API page
+  describes *Pass, Mask, Reject*. The binary decides it:
+
+      unknown variant `mask`, expected `reject` or `audit`
+
+  So Presidio can block but never redact, and `GUARDRAIL_ACTION=mask` in the
+  adapter has no effect on this build. Redaction is the regex layer's job.
+
+- **Streaming is guarded only because it is switched on.** `guardrails.streaming`
+  accepts `Enabled` | `Disabled`; the config sets `Enabled`. Without it,
+  `stream: true` is an unguarded path straight out of the platform.
+
+- **Fail-closed is explicit, not default.** The webhook's `failureMode` accepts
+  `failClosed` | `failOpen`. Both request and response guards set `failClosed`:
+  if Presidio is down, the call does not proceed unscreened.
+
+- **The entity list is a deliberate trade.** `PRESIDIO_ENTITIES` is curated
+  rather than empty, because empty means every entity Presidio knows — and
+  spaCy tags "France" in *"What is the capital of France?"* as `LOCATION`. The
+  default excludes `LOCATION`, `DATE_TIME`, `NRP` and `URL`. The cost: a bare
+  street address with no name attached is not caught. Add `LOCATION` back if
+  that trade is wrong for your data.
 
 ### Fail closed
 

@@ -25,6 +25,9 @@ services:
     command: ["-f", "/config.yaml"]
     volumes:
       - ./agentgateway/config.yaml:/config.yaml:ro
+      # Public half of the dev signing key. Create it once with:
+      #   python3 scripts/agent_token.py init
+      - ./auth/jwks.json:/auth/jwks.json:ro
     environment:
       # Where Ollama actually runs — another machine, this Docker host, or the
       # optional in-compose service below. Full URL with scheme and /v1.
@@ -40,8 +43,8 @@ services:
       - GROQ_API_KEY=${GROQ_API_KEY:-}
       - MISTRAL_API_KEY=${MISTRAL_API_KEY:-}
     ports:
-      - "4000:4000"      # gateway + LLM playground
-      - "15000:15000"    # admin UI
+      - "${GATEWAY_PORT:-4000}:4000"        # gateway + LLM playground
+      - "${GATEWAY_ADMIN_PORT:-15000}:15000"  # admin UI
     depends_on:
       # Not ollama: it may be on another machine, and is opt-in here.
       - cedar-shim
@@ -61,18 +64,29 @@ services:
     # unreachable from other containers.
     command: ["--addr", "0.0.0.0:8180"]
     ports:
-      - "8180:8180"
+      - "${CEDAR_AGENT_PORT:-8180}:8180"
     networks: [agentmesh]
 
   # Translates agentgateway's extAuthz (any 2xx = allow) into a Cedar decision.
   cedar-shim:
-    build: ./cedar-shim
+    build:
+      # Root context so the image can pick up certs/ — see certs/README.md.
+      context: .
+      dockerfile: cedar-shim/Dockerfile
     container_name: agentmesh_cedar_shim
     environment:
       - CEDAR_AGENT_URL=http://cedar-agent:8180
       - LISTEN_PORT=9000
-    ports:
-      - "9000:9000"
+      # 1 logs the headers agentgateway forwards here — the fastest way to see
+      # why an identity is or is not arriving. May include Authorization.
+      - SHIM_DEBUG_HEADERS=${SHIM_DEBUG_HEADERS:-0}
+    # Deliberately NOT published. Only agentgateway calls it, over the compose
+    # network — and it is the component that decides authorization, so exposing
+    # it on the host is both an unnecessary clash (9000 is a popular port) and
+    # an unnecessary attack surface. To debug it:
+    #   docker compose exec agentgateway wget -qO- http://cedar-shim:9000/healthz
+    expose:
+      - "9000"
     depends_on:
       - cedar-agent
     networks: [agentmesh]
@@ -80,12 +94,15 @@ services:
   # Loads cedar/ schema, policies and entities into cedar-agent on startup,
   # then exits. Re-run with `docker compose up cedar-loader` after edits.
   cedar-loader:
-    image: curlimages/curl:8.11.1
+    # Stock python image, stdlib only — the loader builds JSON with json.dumps
+    # rather than shell escaping. See the header of scripts/load_cedar.py for
+    # why that distinction cost a debugging session.
+    image: python:3.12-slim
     container_name: agentmesh_cedar_loader
     volumes:
       - ./cedar:/cedar:ro
-      - ./scripts/load-cedar.sh:/load-cedar.sh:ro
-    entrypoint: ["sh", "/load-cedar.sh"]
+      - ./scripts/load_cedar.py:/load_cedar.py:ro
+    entrypoint: ["python", "-u", "/load_cedar.py"]
     environment:
       - CEDAR_AGENT_URL=http://cedar-agent:8180
     depends_on:
@@ -104,18 +121,20 @@ services:
     volumes:
       - ./presidio/conf/recognizers.yaml:/app/conf/recognizers.yaml:ro
     ports:
-      - "5001:3000"
+      - "${PRESIDIO_ANALYZER_PORT:-5001}:3000"
     networks: [agentmesh]
 
   presidio-anonymizer:
     image: mcr.microsoft.com/presidio-anonymizer:latest
     container_name: agentmesh_presidio_anonymizer
     ports:
-      - "5002:3000"
+      - "${PRESIDIO_ANONYMIZER_PORT:-5002}:3000"
     networks: [agentmesh]
 
   presidio-adapter:
-    build: ./presidio-adapter
+    build:
+      context: .
+      dockerfile: presidio-adapter/Dockerfile
     container_name: agentmesh_presidio_adapter
     environment:
       - PRESIDIO_ANALYZER_URL=http://presidio-analyzer:3000
@@ -125,8 +144,16 @@ services:
       # which is what "PII never leaves" actually requires.
       - GUARDRAIL_ACTION=${GUARDRAIL_ACTION:-reject}
       - PRESIDIO_SCORE_THRESHOLD=${PRESIDIO_SCORE_THRESHOLD:-0.5}
-    ports:
-      - "8080:8080"
+      # Which Presidio entities cause a rejection. Empty would mean "all", and
+      # all is unusable: spaCy tags "France" in "What is the capital of France?"
+      # as LOCATION, so every third prompt gets blocked. LOCATION, DATE_TIME,
+      # NRP and URL are therefore excluded by default — add LOCATION back if
+      # bare street addresses matter more to you than false positives.
+      - PRESIDIO_ENTITIES=${PRESIDIO_ENTITIES:-PERSON,EMAIL_ADDRESS,PHONE_NUMBER,US_SSN,US_ITIN,US_PASSPORT,US_DRIVER_LICENSE,US_BANK_NUMBER,CREDIT_CARD,IBAN_CODE,CRYPTO,MEDICAL_LICENSE,UK_NHS,IP_ADDRESS,INTERNAL_EMPLOYEE_ID}
+    # Not published, for the same reason as cedar-shim: only the gateway calls
+    # it, and 8080 clashes with almost everything.
+    expose:
+      - "8080"
     depends_on:
       - presidio-analyzer
       - presidio-anonymizer
@@ -148,7 +175,7 @@ services:
     volumes:
       - ollama-models:/root/.ollama
     ports:
-      - "11434:11434"
+      - "${OLLAMA_PORT:-11434}:11434"
     networks: [agentmesh]
 
   # ─────────────────────────────────────────────────────────────────────
@@ -164,7 +191,7 @@ services:
       - POSTGRES_PWD=temporal
       - POSTGRES_SEEDS=temporal-postgres
     ports:
-      - "7233:7233"
+      - "${TEMPORAL_PORT:-7233}:7233"
     depends_on:
       temporal-postgres:
         condition: service_healthy
@@ -177,7 +204,7 @@ services:
       - TEMPORAL_ADDRESS=temporal:7233
       - TEMPORAL_CORS_ORIGINS=http://localhost:8233
     ports:
-      - "8233:8080"
+      - "${TEMPORAL_UI_PORT:-8233}:8080"
     depends_on:
       - temporal
     networks: [agentmesh]
@@ -204,10 +231,15 @@ services:
       dockerfile: orchestrator/Dockerfile
     container_name: agentmesh_orchestrator
     environment:
+      # Without this, print() from the worker is buffered and `docker compose
+      # logs` shows nothing at all — including the connection banner.
+      - PYTHONUNBUFFERED=1
       - TEMPORAL_HOST=temporal:7233
       - TEMPORAL_NAMESPACE=default
       - GATEWAY_URL=http://agentgateway:4000
-      - GATEWAY_TOKEN=${GATEWAY_TOKEN:-dev-operator-token}
+      # Must be a JWT — see .env.example. No default: a placeholder string
+      # would fail authn at the first call, far from the cause.
+      - GATEWAY_TOKEN=${GATEWAY_TOKEN:?run scripts/agent_token.py issue orchestrator and set GATEWAY_TOKEN in .env}
       - OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317
     depends_on:
       - temporal
@@ -221,10 +253,15 @@ services:
       dockerfile: remote_runner/Dockerfile
     container_name: agentmesh_remote_runner
     environment:
+      # Without this, print() from the worker is buffered and `docker compose
+      # logs` shows nothing at all — including the connection banner.
+      - PYTHONUNBUFFERED=1
       - TEMPORAL_HOST=temporal:7233
       - TEMPORAL_NAMESPACE=default
       - GATEWAY_URL=http://agentgateway:4000
-      - GATEWAY_TOKEN=${GATEWAY_TOKEN:-dev-operator-token}
+      # Must be a JWT — see .env.example. No default: a placeholder string
+      # would fail authn at the first call, far from the cause.
+      - GATEWAY_TOKEN=${GATEWAY_TOKEN:?run scripts/agent_token.py issue orchestrator and set GATEWAY_TOKEN in .env}
       - OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317
     depends_on:
       - temporal
@@ -235,7 +272,10 @@ services:
   # Telemetry — strips prompt bodies, forwards to Langfuse over OTLP/HTTP
   # ─────────────────────────────────────────────────────────────────────
   otel-collector:
-    image: otel/opentelemetry-collector-contrib:0.100.0
+    # 0.100.0 could not expand ${env:VAR:-default} and refused to start when
+    # LANGFUSE_BASIC_AUTH was unset. Telemetry being unconfigured must not take
+    # the collector down.
+    image: otel/opentelemetry-collector-contrib:0.119.0
     container_name: agentmesh_otel_collector
     command: ["--config=/etc/otel-collector-config.yaml"]
     environment:
@@ -246,8 +286,8 @@ services:
     volumes:
       - ./otel/otel-collector-config.yaml:/etc/otel-collector-config.yaml:ro
     ports:
-      - "4317:4317"
-      - "4318:4318"
+      - "${OTEL_GRPC_PORT:-4317}:4317"
+      - "${OTEL_HTTP_PORT:-4318}:4318"
     extra_hosts:
       - "host.docker.internal:host-gateway"
     networks: [agentmesh]

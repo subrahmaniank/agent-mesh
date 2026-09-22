@@ -5,12 +5,12 @@ scratch. Agents are catalogued and approved in a registry; every call they make
 — LLM, MCP or tool — goes through one gateway that authenticates them,
 authorizes with Cedar, screens for PII, and records tokens and cost.
 
-> ### ⚠️ Status: configured, not yet run
-> The stack below has **not been started** — no Docker daemon was available in
-> the environment where it was assembled. Configuration shapes came from vendor
-> documentation and are marked `[check]` where inferred. What *has* been
-> verified, with tests you can run right now, is in
-> [What is actually verified](#what-is-actually-verified).
+> ### Status: running, end to end
+> The stack starts with `docker compose up -d` and a real request has been
+> served through the whole path — JWT authn → Cedar → PII guardrails → Ollama →
+> completion with token counts. The authorization matrix, including a failed
+> identity-forgery attempt, is reproduced in
+> [What is verified](#what-is-verified).
 >
 > A previous iteration hand-wrote a Python substitute for agentgateway and
 > labelled it "AgentGateway.dev". That implementation is preserved on the
@@ -82,17 +82,34 @@ wherever it runs — so the platform works with no cloud credentials at all.**
 ## Why an unregistered agent is inert
 
 A registry records intent; it cannot stop a process from starting. Enforcement
-is the choke point:
+is the choke point. Every row below was **observed against the running stack**:
 
-| Attempt | Stopped by |
+| Attempt | Result |
 |---|---|
-| No credential | agentgateway → 401 |
-| Stolen credential, no Cedar principal | cedar-agent → Deny → 403 |
-| Registered but no role for that model | Cedar → Deny → 403 |
-| MCP server not in `mcp.targets` | no route |
-| Prompt contains PII | masked, or rejected |
+| No credential | `401 authentication failure: no bearer token found` |
+| Valid token, unapproved in registry | `403 cedar:deny ['01-registry-admission']` |
+| `pii-handler` asking for a hosted model | `403` — pinned to local tier |
+| Agent asking for an unregistered model name | `403` — Cedar has no such resource |
+| **Forged `x-agentmesh-agent` header** | **ignored** — see below |
+| Prompt with an SSN | masked inline, call proceeds |
+| Prompt with a person + address | `403 content contains PERSON` |
 
-An unapproved agent can run — and gets no model, no tools, no data.
+The forgery case is the one that matters. agentgateway forwards **only**
+`authorization` and `host` to an HTTP extAuthz endpoint — a client's own headers
+never reach the shim. Identity is injected by the gateway from the validated
+token:
+
+```yaml
+extAuthz:
+  protocol:
+    http:
+      addRequestHeaders:
+        x-agentmesh-agent: jwt.sub     # CEL over the verified JWT
+```
+
+So an agent holding `pii-handler`'s token and sending
+`x-agentmesh-agent: research-assistant` is still authorized as `pii-handler`.
+An agent never asserts who it is.
 
 ## Quickstart
 
@@ -101,6 +118,8 @@ cp .env.example .env
 # Point OLLAMA_BASE_URL at your Ollama server — full URL, including /v1:
 #   OLLAMA_BASE_URL=http://192.168.1.20:11434/v1
 
+python3 scripts/agent_token.py init   # one-time: dev signing key + JWKS
+
 docker compose up -d          # gateway, cedar, presidio, temporal, otel
 ./scripts/up-vendor-stacks.sh # agentregistry, Agent Control, Langfuse
 
@@ -108,11 +127,20 @@ docker compose up -d          # gateway, cedar, presidio, temporal, otel
 #   docker compose --profile local-llm up -d
 #   OLLAMA_BASE_URL=http://ollama:11434/v1
 
+TOKEN=$(python3 scripts/agent_token.py issue research-assistant)
 curl -X POST localhost:4000/v1/chat/completions \
   -H 'Content-Type: application/json' \
-  -H "Authorization: Bearer ${GATEWAY_TOKEN:-dev-operator-token}" \
+  -H "Authorization: Bearer $TOKEN" \
   -d '{"model":"llama3","messages":[{"role":"user","content":"hello"}]}'
 ```
+
+Two things must be registered before a call succeeds, and that is the design:
+the **agent** in `cedar/entities.json` (so it has a principal) and the **model
+name you actually ask for**, tag included (so it has a resource). An
+unregistered model is denied exactly like an unapproved agent.
+
+Behind a TLS-inspecting proxy, drop your corporate root CA into `certs/` before
+building — see [`certs/README.md`](certs/README.md).
 
 | UI | URL |
 |---|---|
@@ -127,23 +155,61 @@ Full walkthrough: [`docs/getting-started.md`](docs/getting-started.md).
 ## Repository layout
 
 ```
-agentgateway/config.yaml     the substance: backends, guardrails, extAuthz, MCP
-cedar/                       policies.cedar + entities.json (real Cedar)
+agentgateway/config.yaml     the substance: authn, backends, guardrails, extAuthz
+cedar/policies/*.cedar       one file per policy — the filename is the policy id
+cedar/entities.json          agents, models and tools Cedar knows about
 cedar-shim/                  extAuthz → Cedar decision            [code]
 presidio-adapter/            guardrail webhook → Presidio         [code]
 orchestrator/                Temporal workflows and activities    [code]
 agentcontrol/controls/       step-level controls (JSON)
 registry/                    how agents get published and approved
 otel/                        ZDR transform + Langfuse exporter
-scripts/                     cedar loader, vendor stack launcher
+certs/                       corporate root CAs for TLS-inspecting proxies
+auth/                        dev JWT signing key + JWKS (gitignored)
+scripts/                     cedar loader, token issuer, vendor stack launcher
 tests/                       cedar policies, adapters, Temporal workflows
 ```
 
 Three things are code; everything else is configuration.
 
-## What is actually verified
+## What is verified
 
-`uv run pytest tests/ -q` → **46 passing**, no Docker required:
+### Against the running stack
+
+```
+agent → JWT authn → Cedar → regex mask → Presidio NER → Ollama → completion
+```
+
+A prompt containing an SSN was masked in flight and still returned a completion
+with `usage.total_tokens`; a prompt naming a person was rejected before egress.
+The full authorization matrix is the table above — every row observed, not
+inferred.
+
+Shapes confirmed by running `--validate-only` against agentgateway v1.5.0
+rather than by reading docs:
+
+| Thing | Finding |
+|---|---|
+| Guardrail regex builtins | exactly `ssn`, `creditCard`, `email`, `phoneNumber` |
+| Regex actions | `mask` \| `reject` \| `audit`; rules take `{builtin}` or `{pattern}` — **no `name` field** |
+| **Webhook actions** | `reject` \| `audit` — **no `mask`.** The vendor's Webhook API page lists Pass/Mask/Reject; this build does not implement Mask, so a webhook cannot redact |
+| Webhook `failureMode` | `failClosed` \| `failOpen` — set `failClosed` or Presidio being down means PII flows |
+| `guardrails.streaming` | `Enabled` \| `Disabled`; without `Enabled`, `stream: true` is an unguarded path |
+| extAuthz forwarding | only `authorization` + `host`; body and identity must be requested explicitly |
+| JWKS key types | RSA, EC, OKP[Ed25519] — symmetric keys rejected outright |
+| Model name wildcards | only at the start or the end; `claude-*-direct` is a parse error |
+| `ui:` block | has **no** `enabled` field; `ui: {enabled: true}` fails to parse |
+
+Re-check any of it after an edit:
+
+```bash
+docker run --rm -v ./agentgateway:/c:ro cr.agentgateway.dev/agentgateway:v1.5.0 \
+  -f /c/config.yaml --validate-only
+```
+
+### Without Docker
+
+`uv run pytest tests/ -q` → **46 passing**:
 
 | Suite | Proves |
 |---|---|
@@ -152,10 +218,11 @@ Three things are code; everything else is configuration.
 | `tests/adapters/test_presidio_adapter.py` (11) | The agentgateway webhook contract, NER-only entities caught where regex would miss, and **fail-closed when Presidio is down** |
 | `tests/workflows/` (8) | Temporal saga: LIFO compensation, policy denials not retried, partial-compensation recovery, approval signal, SLA timeout |
 
-Not verified: anything needing a running container — gateway config shapes, the
-cedar-agent wire format, the vendor compose files, and the end-to-end request
-path. Those are the first things to exercise once Docker is available; see the
-[first-run checklist](docs/getting-started.md#first-run-checklist).
+Still unverified: the three vendor stacks in `scripts/up-vendor-stacks.sh`
+(agentregistry, Agent Control, Langfuse) have not been started, so the registry
+→ Cedar identity hand-off and the Langfuse token/cost view are configured but
+unexercised. MCP targets are empty, so the tool path has been proven only
+through Cedar, not through a real MCP server.
 
 ## Documentation
 

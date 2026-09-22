@@ -8,7 +8,14 @@ own Ollama, wherever it runs. Cloud providers are additive.
 ## 1. Prerequisites
 
 - Docker and Docker Compose
-- Python 3.12 + [uv](https://docs.astral.sh/uv/) (for the test suite only)
+- Python 3.12 (the Cedar loader and token issuer are stdlib-only scripts)
+- `openssl` (signs development JWTs)
+- [uv](https://docs.astral.sh/uv/), for the test suite only
+
+**Behind a TLS-inspecting proxy** (Zscaler, Netskope, Palo Alto): copy your
+corporate root CA into `certs/` as a `.crt` before building, or every image
+that installs a package fails with `CERTIFICATE_VERIFY_FAILED`. See
+[`certs/README.md`](../certs/README.md).
 
 ## 2. Bring it up
 
@@ -53,18 +60,86 @@ docker exec agentmesh_ollama ollama pull llama3
 | Temporal | http://localhost:8233 | Workflows and sagas |
 | cedar-agent | http://localhost:8180 | Cedar PDP (`/rapidoc` for its API explorer) |
 
-## 3. First call
+> **Ports.** Every published port is overridable in `.env` — `GATEWAY_PORT`,
+> `OTEL_GRPC_PORT` and friends. 4000, 4317/4318 and 3000 are claimed by a lot of
+> other local stacks; when one clashes you get
+> `Bind for 0.0.0.0:4317 failed: port is already allocated`. Find the holder
+> with `ss -lntp | grep :4317`.
+
+## 3. Issue a credential
+
+An agent's identity is the `sub` claim of a signed JWT. Nothing else establishes
+it — see [Why forgery fails](#why-forgery-fails).
+
+```bash
+python3 scripts/agent_token.py init                      # once per machine
+docker compose restart agentgateway                      # pick up the JWKS
+TOKEN=$(python3 scripts/agent_token.py issue research-assistant)
+```
+
+`init` writes `auth/agentmesh-dev.ed25519.pem` (private, gitignored) and
+`auth/jwks.json` (public, mounted read-only into the gateway). In production
+this is your IdP's JWKS instead; only `jwtAuth.jwks.file` changes.
+
+## 4. First call
 
 ```bash
 curl -X POST localhost:4000/v1/chat/completions \
   -H 'Content-Type: application/json' \
-  -H 'Authorization: Bearer dev-operator-token' \
+  -H "Authorization: Bearer $TOKEN" \
   -d '{"model":"llama3","messages":[{"role":"user","content":"Say hello."}]}'
 ```
 
 That single request exercises authn → Cedar → guardrails → routing → telemetry.
 
-## 4. Add a cloud provider
+### If it returns 403
+
+That is the platform working, not failing. Cedar is deny-by-default and two
+things must be registered:
+
+```bash
+docker compose logs cedar-shim | tail -5
+# DENY agent=research-assistant action=call_model resource=gemma4:latest
+#      (cedar:deny [])
+```
+
+An empty `cedar:deny []` means no `permit` matched — usually the **model name
+is not a registered resource**. Model ids must match what clients send, tag and
+all (`gemma4:latest`, not `gemma4`). Add it to `cedar/entities.json`:
+
+```json
+{ "uid":   { "type": "AgentMesh::Model", "id": "gemma4:latest" },
+  "attrs": { "tier": "local", "tenant": "acme", "provider": "ollama" },
+  "parents": [] }
+```
+
+then reload without restarting anything else:
+
+```bash
+docker compose up -d --force-recreate cedar-loader && docker compose logs cedar-loader
+```
+
+A *named* policy in the denial — `cedar:deny ['01-registry-admission']` — means
+a specific `forbid` fired, and the filename tells you which.
+
+### Why forgery fails
+
+agentgateway forwards only `authorization` and `host` to an HTTP extAuthz
+endpoint; a client's own headers never arrive. The identity is injected by the
+gateway from the validated token via a CEL expression
+(`addRequestHeaders: {x-agentmesh-agent: jwt.sub}`). Confirm it yourself:
+
+```bash
+PH=$(python3 scripts/agent_token.py issue pii-handler)
+curl -X POST localhost:4000/v1/chat/completions \
+  -H "Authorization: Bearer $PH" \
+  -H 'x-agentmesh-agent: research-assistant' \
+  -H 'Content-Type: application/json' \
+  -d '{"model":"gpt-4.1","messages":[{"role":"user","content":"hi"}]}'
+# 403 — the shim logs agent=pii-handler, not research-assistant
+```
+
+## 5. Add a cloud provider
 
 Put a key in `.env`:
 
@@ -83,7 +158,7 @@ curl ... -d '{"model":"gpt-4.1","messages":[...]}'
 No agent code changes, and the guardrails, Cedar authorization and telemetry
 apply to the new backend automatically.
 
-## 5. Connect Langfuse
+## 6. Connect Langfuse
 
 Create a project in the Langfuse UI, then:
 
@@ -95,7 +170,7 @@ docker compose restart otel-collector
 Langfuse accepts OTLP over **HTTP only** — a gRPC exporter silently drops every
 trace. `otel/otel-collector-config.yaml` is already configured correctly.
 
-## 6. Run the tests
+## 7. Run the tests
 
 ```bash
 uv venv --python 3.12 .venv && source .venv/bin/activate
@@ -105,54 +180,62 @@ uv run pytest tests/ -q          # 46 passing, no Docker needed
 
 ---
 
-## First-run checklist
+## Troubleshooting, from things that actually went wrong
 
-Nothing in the container stack has been started yet — no Docker daemon was
-available when it was assembled. Work through these in order; each is a place
-where a documented shape may differ from the shipped build.
+| Symptom | Cause | Fix |
+|---|---|---|
+| `CERTIFICATE_VERIFY_FAILED` during `docker compose build` | TLS-inspecting proxy; the container trusts public roots only | put the corporate CA in `certs/` — [`certs/README.md`](../certs/README.md) |
+| `Bind for 0.0.0.0:4317 failed: port is already allocated` | another local stack owns it | override the port in `.env` |
+| `upstream call failed: Connect: invalid peer certificate: UnknownIssuer` | same proxy, now on the gateway's egress | add `backendTLS: {root: /certs/...}` to that model entry — not `insecure: true` |
+| `upstream call failed: Connect: No route to host` | `OLLAMA_BASE_URL` points somewhere unreachable | Ollama binds `127.0.0.1` by default; set `OLLAMA_HOST=0.0.0.0` **on that machine** and open the port |
+| Gateway exits with `data did not match any variant of untagged enum ...` | a config shape is wrong | `--validate-only` names the field and lists the accepted values |
+| `cedar-loader` exits non-zero with HTTP 400 | a `.cedar` file holds more than one statement | one statement per file in `cedar/policies/` |
+| Every request 403s with `cedar:deny []` | the model or agent is not a registered Cedar entity | add it to `cedar/entities.json`, re-run the loader |
+| Ordinary prompts rejected as PII | `PRESIDIO_ENTITIES` empty means *every* entity; spaCy tags "France" as `LOCATION` | keep the curated default list |
+| `presidio-analyzer` exits code 3 | its registry YAML replaces the defaults and needs a top-level `recognizers:` key | see the header of `presidio/conf/recognizers.yaml` |
+| otel-collector won't start on an unset variable | older collectors can't expand `${env:VAR:-default}` | already fixed by pinning 0.119.0 |
 
-1. **Does agentgateway accept the config?**
-   `docker compose logs agentgateway`. Entries marked `[check]` in
-   `agentgateway/config.yaml` are inferred — the regex-guard fields,
-   `mcp.targets`, the `ui` block, and where `extAuthz` attaches. Validate
-   against `https://agentgateway.dev/schema/config`.
+## Verifying the security model
 
-   Also confirm the gateway can reach Ollama:
-   `docker compose exec agentgateway wget -qO- $OLLAMA_BASE_URL/models`.
-   A refused connection usually means Ollama is bound to `127.0.0.1` on its
-   host rather than `0.0.0.0`.
+```bash
+RA=$(python3 scripts/agent_token.py issue research-assistant)
+PH=$(python3 scripts/agent_token.py issue pii-handler)
+UN=$(python3 scripts/agent_token.py issue unapproved-agent)
 
-2. **⚠️ Can a client forge the agent identity header?**
-   The single most important check. cedar-shim trusts the header agentgateway
-   sets after authn. Send a request with that header set by hand and confirm the
-   gateway overwrites it. If it does not, authorization is bypassable.
+ask() { curl -s -o /dev/null -w "%{http_code}\n" -X POST localhost:4000/v1/chat/completions \
+  -H 'Content-Type: application/json' -H "Authorization: Bearer $1" \
+  -d "{\"model\":\"$2\",\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}]}"; }
 
-3. **Did the Cedar policies load?**
-   `docker compose logs cedar-loader`, then
-   `curl localhost:8180/v1/policies`. A failed load leaves an empty policy set —
-   which denies everything rather than allowing it, so the symptom is universal
-   403s, not a silent hole.
+ask "$RA" llama3:latest   # 200 — permitted
+ask "$PH" gpt-4.1         # 403 — pinned to the local tier
+ask "$UN" llama3:latest   # 403 — 01-registry-admission
+curl -s -o /dev/null -w "%{http_code}\n" -X POST localhost:4000/v1/chat/completions \
+  -H 'Content-Type: application/json' -d '{"model":"llama3","messages":[]}'   # 401
+```
 
-4. **Does a Deny actually deny?**
-   Call a model the agent has no role for. Expect 403. If it returns 200,
-   cedar-shim is not in the path.
+Then the guardrails:
 
-5. **Does the guardrail fire?**
-   Send a prompt containing an SSN and another containing only a person's name
-   and address. The first should be masked, the second rejected —
-   `docker compose logs presidio-adapter` shows which.
+```bash
+# masked inline by the regex layer, call still succeeds
+curl -s -X POST localhost:4000/v1/chat/completions -H 'Content-Type: application/json' \
+  -H "Authorization: Bearer $RA" \
+  -d '{"model":"llama3:latest","messages":[{"role":"user","content":"My SSN is 123-45-6789"}]}'
 
-6. **Does a webhook `MaskAction` work?**
-   Set `GUARDRAIL_ACTION=mask` and re-send. If masking is not honoured (the
-   vendor docs disagree), revert to `reject` and record the finding.
+# rejected by Presidio NER before egress
+curl -s -X POST localhost:4000/v1/chat/completions -H 'Content-Type: application/json' \
+  -H "Authorization: Bearer $RA" \
+  -d '{"model":"llama3:latest","messages":[{"role":"user","content":"Contact Michael Thompson at 4521 Oakwood Drive"}]}'
 
-7. **Do traces reach Langfuse with tokens and cost?**
-   Check the Langfuse UI after a call. If empty, confirm `LANGFUSE_BASIC_AUTH`
-   is set and the exporter is `otlphttp/`, not `otlp/`.
+docker compose logs presidio-adapter | tail -3
+```
 
-8. **Does the Temporal path work end to end?**
-   `docker compose exec orchestrator python -m orchestrator.starter run-dag`,
-   then watch the event history at `:8233`.
+## Still to exercise
+
+The three vendor stacks have not been started here:
+`./scripts/up-vendor-stacks.sh` brings up agentregistry, Agent Control and
+Langfuse. Until then the registry → Cedar identity hand-off and the per-session
+token/cost view are configured but unproven. `mcp.targets` is also empty, so
+the tool path has been verified through Cedar but not against a real MCP server.
 
 ## Teardown
 

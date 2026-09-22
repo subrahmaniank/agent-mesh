@@ -1,0 +1,13 @@
+# Every image in this repo builds from the repository root, so keep the context
+# small and keep secrets out of it. certs/ is deliberately NOT excluded — the
+# images need it to trust a corporate TLS-inspecting proxy.
+.git
+.venv
+.pytest_cache
+__pycache__
+**/__pycache__
+*.pyc
+.env
+.vendor
+docs
+tests

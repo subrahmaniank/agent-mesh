@@ -1,9 +1,14 @@
 """Cedar IAM policy tests.
 
-These run the real Cedar engine over the shipped `cedar/policies.cedar` and
+These run the real Cedar engine over the shipped `cedar/policies/*.cedar` and
 `cedar/entities.json` — the same files cedar-agent loads at runtime. They need
 no Docker, so the authorization logic stays verifiable even when the stack is
 not running.
+
+The policies live one-per-file because cedar-agent accepts only one statement
+per policy entry; concatenating them here is exactly what the engine evaluates
+as a set, so the tests still see the real interaction between permits and
+forbids.
 
 Cedar SKIPS a policy that errors at evaluation time rather than failing the
 request, so a malformed rule silently disappears and the request is allowed by
@@ -17,7 +22,9 @@ import cedarpy
 import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
-POLICIES = (ROOT / "cedar" / "policies.cedar").read_text()
+POLICY_FILES = sorted((ROOT / "cedar" / "policies").glob("*.cedar"))
+assert POLICY_FILES, "no policy files found in cedar/policies/"
+POLICIES = "\n".join(f.read_text() for f in POLICY_FILES)
 
 _raw = json.loads((ROOT / "cedar" / "entities.json").read_text())
 # Strip documentation-only keys before handing entities to the engine.

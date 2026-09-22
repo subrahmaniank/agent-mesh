@@ -34,10 +34,17 @@ exporters:
   # `otlp/` (gRPC) exporter here would silently drop every trace.
   # LANGFUSE_BASIC_AUTH is base64("public_key:secret_key") from a Langfuse
   # project; without it Langfuse rejects the batch.
+  #
+  # The `:-` defaults are load-bearing. An unset variable is nil, not "", and
+  # the collector refuses to start on it:
+  #   failed to resolve config: expanding ${env:LANGFUSE_BASIC_AUTH},
+  #   expected convertable to string value type, got %!q(<nil>)
+  # Telemetry being unconfigured must not stop the collector — the debug
+  # exporter below is what you read until a Langfuse project exists.
   otlphttp/langfuse:
-    endpoint: "${env:LANGFUSE_OTLP_ENDPOINT}"
+    endpoint: "${env:LANGFUSE_OTLP_ENDPOINT:-http://langfuse-web:3000/api/public/otel}"
     headers:
-      Authorization: "Basic ${env:LANGFUSE_BASIC_AUTH}"
+      Authorization: "Basic ${env:LANGFUSE_BASIC_AUTH:-}"
 
   debug:
     verbosity: normal

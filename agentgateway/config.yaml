@@ -7,10 +7,13 @@
 # never touches agent code.
 #
 # ─────────────────────────────────────────────────────────────────────────────
-# VERIFICATION STATUS — this file has NOT been run against agentgateway v1.5.0.
-# Shapes marked [verified] came from the vendor docs during design; those marked
-# [check] are inferred and must be validated on first boot against the schema
-# above (the docs render markdown at any docs URL + ".md").
+# VERIFICATION — every shape below was validated against agentgateway v1.5.0:
+#
+#   docker run --rm -v ./agentgateway:/c:ro cr.agentgateway.dev/agentgateway:v1.5.0 \
+#     -f /c/config.yaml --validate-only
+#
+# Use that command after any edit. Its errors name the exact field and list the
+# accepted alternatives, which is how the enums documented below were found.
 # ─────────────────────────────────────────────────────────────────────────────
 
 llm:
@@ -18,78 +21,127 @@ llm:
   # newly added provider from quietly bypassing the controls.
   policies:
 
-    # ── Layer 1: mask well-formed PII inline ────────────────────────────────
-    # [check] exact field names for the regex guard. `mask` is the only native
-    # masking action anywhere in this stack, and it does NOT apply to streamed
-    # responses — streaming falls through to the reject layer below.
     guardrails:
+      # Apply the checks to streamed responses too. Without this, `stream: true`
+      # is an unguarded path straight out of the platform.
+      # Accepted values: Enabled | Disabled (capitalised).
+      streaming: Enabled
+
       request:
+        # ── Layer 1: mask well-formed PII inline ──────────────────────────────
+        # `action` accepts exactly: mask | reject | audit.
+        # Each rule is either {builtin: <name>} or {pattern: <regex>}. There is
+        # no `name` field — a rule carrying one is rejected outright.
+        # The builtin set is exactly: ssn, creditCard, email, phoneNumber.
         - regex:
             action: mask
             rules:
-              - name: US_SSN
-                pattern: '\b\d{3}-\d{2}-\d{4}\b'
-              - name: CREDIT_CARD
-                pattern: '\b(?:\d{4}[ -]){3}\d{4}\b'
-              - name: EMAIL
-                pattern: '\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b'
-        # ── Layer 2: Presidio NER catches what regex cannot, and rejects ────
-        # [verified] webhook target shape. The adapter implements
-        # POST /request and POST /response.
+              - builtin: ssn
+              - builtin: creditCard
+              - builtin: email
+              - builtin: phoneNumber
+              # Org-specific identifier; mirrors the Presidio recognizer of the
+              # same shape in presidio/conf/recognizers.yaml.
+              - pattern: 'EMP-[0-9]{6}'
+
+        # ── Layer 2: Presidio NER catches what regex cannot ───────────────────
+        # `action` here accepts ONLY reject | audit — there is no mask. The
+        # vendor's Guardrail Webhook API page describes Pass/Mask/Reject; this
+        # build does not implement Mask, so a webhook cannot redact. Masking is
+        # the regex layer's job and rejection is this one's, which is why the
+        # adapter defaults to GUARDRAIL_ACTION=reject.
+        #
+        # failureMode accepts failClosed | failOpen. failClosed is the whole
+        # point: if Presidio is unreachable, the request must not proceed
+        # unscreened.
         - webhook:
             target:
               host: presidio-adapter:8080
+            action: reject
+            failureMode: failClosed
+
       response:
+        # The completion is screened on the way back too — a model can echo or
+        # infer PII that was never in the prompt.
         - regex:
             action: mask
             rules:
-              - name: US_SSN
-                pattern: '\b\d{3}-\d{2}-\d{4}\b'
-              - name: CREDIT_CARD
-                pattern: '\b(?:\d{4}[ -]){3}\d{4}\b'
+              - builtin: ssn
+              - builtin: creditCard
+              - builtin: phoneNumber
         - webhook:
             target:
               host: presidio-adapter:8080
+            action: reject
+            failureMode: failClosed
+
+    # ── Authentication: who is calling ──────────────────────────────────────
+    # The token's `sub` is the agent identity, and the ONLY source of it.
+    # Issue one with:  python3 scripts/agent_token.py issue <agent-id>
+    #
+    # mode accepts strict | optional | permissive — strict rejects a request
+    # with no valid token, which is what makes an unregistered agent inert.
+    # location accepts header | queryParameter | cookie | expression.
+    #
+    # jwks accepts file | inline | remote. In production this points at your
+    # IdP; nothing else in this file changes.
+    jwtAuth:
+      issuer: agentmesh-dev
+      audiences: ["agentmesh-gateway"]
+      jwks:
+        file: /auth/jwks.json
+      mode: strict
 
     # ── Cedar IAM, delegated ────────────────────────────────────────────────
-    # [verified] extAuthz shape; [check] that it attaches at this level rather
-    # than on a gateway/route. HTTP protocol chosen deliberately: any 2xx means
-    # allow, which is exactly what cedar-shim translates a Cedar decision into.
+    # HTTP protocol chosen deliberately: any 2xx means allow, which is exactly
+    # what cedar-shim translates a Cedar decision into.
+    #
+    # agentgateway forwards only `authorization` and `host` to an HTTP extAuthz
+    # endpoint — the client's own headers are NOT passed through. That is the
+    # property the security model rests on: an agent can set
+    # `x-agentmesh-agent: someone-else` and it never reaches the shim.
+    #
+    # addRequestHeaders values are CEL expressions (bare, not brace-wrapped), so
+    # the identity the shim authorizes comes from the validated token and
+    # nowhere else. `body` forwards the request body, without which the shim
+    # cannot see which model is being asked for and can only authorize by path.
     extAuthz:
       host: cedar-shim:9000
       protocol:
-        http: {}
+        http:
+          body: request.body
+          addRequestHeaders:
+            x-agentmesh-agent: jwt.sub
 
   models:
 
-    # ── Self-hosted Ollama. No credential required — the platform runs without
-    #    any cloud account, and an agent can be pinned to this backend by Cedar
-    #    policy (see `pii-handler` in cedar/entities.json).
+    # ── OpenAI
     #
-    #    baseUrl is a FULL URL including scheme and the /v1 suffix, not a
-    #    host:port pair. Set OLLAMA_BASE_URL in .env to point at wherever the
-    #    server actually runs — another machine, this Docker host, or the
-    #    optional in-compose service. agentgateway defaults to
-    #    http://localhost:11434/v1 if omitted, which inside a container means
-    #    the container itself, so this is effectively required.
-    - name: "llama3*"
-      provider: ollama
-      params:
-        baseUrl: "$OLLAMA_BASE_URL"
-
-    # ── OpenAI [verified]
+    #    Behind a TLS-inspecting corporate proxy the upstream call fails with
+    #      upstream call failed: Connect: invalid peer certificate: UnknownIssuer
+    #    because the gateway trusts public roots, not your proxy's. Point the
+    #    entry at the CA instead of disabling verification — mount certs/ into
+    #    the container and add:
+    #      backendTLS:
+    #        root: /certs/zscaler-root.crt
+    #    (`insecure: true` also exists. It turns off verification for that
+    #    backend entirely, which is not the same thing and should not be used to
+    #    paper over a missing CA.)
     - name: "gpt-*"
       provider: openAI
       params:
         apiKey: "$OPENAI_API_KEY"
 
-    # ── Anthropic direct [verified]
-    - name: "claude-*-direct"
+    # ── Anthropic direct. Prefixed rather than suffixed: a wildcard may sit
+    #    only at the start or the end of a name, so "claude-*-direct" is
+    #    rejected outright ("model name wildcard must be either at the
+    #    beginning or the end").
+    - name: "anthropic/*"
       provider: anthropic
       params:
         apiKey: "$ANTHROPIC_API_KEY"
 
-    # ── Anthropic on Azure AI Foundry [verified]
+    # ── Anthropic on Azure AI Foundry
     #    agentgateway routes claude-* to /anthropic/v1/messages and injects the
     #    version headers itself — nothing to implement here.
     - name: "claude-*"
@@ -105,28 +157,51 @@ llm:
         azureResourceType: foundry
         azureProjectName: "$AZURE_FOUNDRY_PROJECT"
 
-    # ── Google Gemini [check] param name
+    # ── Google Gemini
     - name: "gemini-*"
       provider: gemini
       params:
         apiKey: "$GEMINI_API_KEY"
 
-    # ── Groq [check] param name
+    # ── Groq
     - name: "groq/*"
       provider: groq
       params:
         apiKey: "$GROQ_API_KEY"
+
+    # ── Self-hosted Ollama, LAST so it acts as the catch-all. No credential
+    #    required — the platform runs with no cloud account at all, and an
+    #    agent can be pinned to this backend by Cedar policy (see `pii-handler`
+    #    in cedar/entities.json).
+    #
+    #    Every cloud entry above is prefix-scoped, so anything they do not claim
+    #    is served locally. That is what lets you `ollama pull` an arbitrary tag
+    #    — gemma4:latest, qwen3:8b — and use it without editing this file.
+    #
+    #    baseUrl is a FULL URL including scheme and the /v1 suffix, not a
+    #    host:port pair. Set OLLAMA_BASE_URL in .env to wherever the server
+    #    actually runs. agentgateway defaults to http://localhost:11434/v1,
+    #    which inside a container means the container itself — so this is
+    #    effectively required.
+    - name: "*"
+      provider: ollama
+      params:
+        baseUrl: "$OLLAMA_BASE_URL"
 
     # More providers are a copy of the pattern above: bedrock (auth.aws),
     # vertex (auth.gcp), mistral, deepseek, together, fireworks, openrouter,
     # cohere, xai, huggingface, baseten, cerebras, deepinfra, vLLM, LM Studio,
     # or any OpenAI-compatible endpoint via a custom provider. Guardrails and
     # extAuthz above apply to every one of them automatically.
+    #
+    # Per-model overrides available if a backend needs to differ: guardrails,
+    # authorization, defaults, overrides, transformation, requestHeaders,
+    # responseHeaders, backendTLS, auth, health, promptCaching, matches.
 
 # ─────────────────────────────────────────────────────────────────────────────
 # MCP — tools reachable through the same authz and guardrail pipeline.
-# [check] target shape in standalone config. Servers listed here should mirror
-# what is approved in agentregistry; nothing else is routable.
+# Servers listed here should mirror what is approved in agentregistry; nothing
+# else is routable.
 # ─────────────────────────────────────────────────────────────────────────────
 mcp:
   targets: []
@@ -135,6 +210,6 @@ mcp:
     #     cmd: npx
     #     args: ["-y", "@modelcontextprotocol/server-filesystem", "/workspace"]
 
-# Admin UI and LLM playground. [check] field names.
-ui:
-  enabled: true
+# There is no `ui:` toggle in v1.5.0 — the block exists but accepts only
+# `gateways` and `policies`, so `ui: {enabled: true}` is a hard parse error.
+# The admin UI and playground are served without configuration.
