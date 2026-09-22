@@ -157,6 +157,24 @@ Any agent framework accumulates `assistant` turns, so the per-model route cannot
 govern a conversation. Making this work needs a second adapter instance wired to
 the hosted model entries, or a gateway that passes route context to the webhook.
 
+### Telemetry carries no prompt content
+
+The exported trace is an allow-list: `keep_keys` in
+`otel/otel-collector-config.yaml` drops every attribute not explicitly named, and
+`config.tracing.fields.remove` strips the client IP at the gateway before the
+span leaves the process. Verified by sending a marker string and searching
+Langfuse's own ClickHouse store — 0 hits across all 58 string columns, and 0
+events with non-empty `input` or `output`.
+
+This replaced a deny-list that named six attributes agentgateway never emits, and
+therefore deleted nothing. See
+[Observability](observability.md#why-the-scrub-had-to-be-rebuilt).
+
+The gateway's request-log database is a **separate path** to a separate store and
+the collector's transform has no effect on it. It does not capture payloads on
+this configuration — confirm with
+`select count() from request_log_payloads`.
+
 ### Fail closed
 
 If Presidio is unreachable, the adapter returns a **reject**, not a pass. An

@@ -47,6 +47,24 @@ config:
     # span is ever emitted. `true` samples every request; use an expression to
     # sample selectively once volume matters.
     randomSampling: true
+    # Strip the caller's IP before the span leaves this process. The collector
+    # drops it too, but defence in depth matters here: a second exporter added
+    # later would bypass the collector's allow-list, not this.
+    #
+    # The request-log database still records src.addr, so "which client made
+    # this call" stays answerable locally without exporting an IP anywhere.
+    fields:
+      remove:
+        - src.addr
+      add:
+        # The identity is not on spans by default — it reaches the request-log
+        # database but not the OTLP export, so a tracing backend has nothing to
+        # attribute usage to. This is what makes "tokens and cost per agent"
+        # answerable in Langfuse. Values are CEL expressions.
+        #
+        # jwt.sub is the validated token's subject, i.e. the Cedar principal —
+        # an agent identifier, not a person.
+        agentgateway.user: jwt.sub
 
   # ── Request log, for the admin UI's Analytics tab ──────────────────────────
   # Separate from tracing and not a substitute for it: this is the gateway's own

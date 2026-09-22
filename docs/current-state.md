@@ -69,10 +69,12 @@ Everything else is YAML, JSON and vendor UIs.
 Being explicit, because the gap between "configured" and "working" is where
 platforms mislead:
 
-- **The three vendor stacks are unstarted.** agentregistry, Agent Control and
-  Langfuse come up via `scripts/up-vendor-stacks.sh` and have not been run, so
-  the registry → Cedar identity hand-off and the per-session token/cost view are
-  configured but unproven.
+- **Langfuse now runs** on http://localhost:3300, provisioned headlessly, with
+  traces arriving and verified to contain no prompt content. agentregistry and
+  Agent Control still do not: agentregistry needs a `VERSION` release tag that
+  nothing supplies yet.
+- **agentregistry and Agent Control are unstarted**, so the registry → Cedar
+  identity hand-off remains unproven.
 - **`mcp.targets` is empty.** The tool path is exercised through Cedar but not
   against a real MCP server.
 

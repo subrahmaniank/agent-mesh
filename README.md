@@ -32,7 +32,7 @@ authorizes with Cedar, screens for PII, and records tokens and cost.
                ├─ 4. route        OpenAI · Anthropic · Azure · Bedrock · Vertex
                │                  Gemini · Groq · Mistral · Ollama · vLLM · …
                ├─ 5. guardrails   same checks over the response
-               └─ 6. telemetry    OTel ─▶ collector (ZDR) ─▶ Langfuse :3000
+               └─ 6. telemetry    OTel ─▶ collector (allow-list) ─▶ Langfuse :3300
                                   request log ─▶ postgres ─▶ Analytics tab
                                           tokens + cost per agent
 
@@ -149,7 +149,7 @@ building — see [`certs/README.md`](certs/README.md).
 | Temporal | http://localhost:8233 | **up** with `docker compose up -d` |
 | agentregistry | http://localhost:12121 | needs `./scripts/up-vendor-stacks.sh` |
 | Agent Control | http://localhost:4001 | needs `./scripts/up-vendor-stacks.sh` |
-| Langfuse | http://localhost:3000 | needs `./scripts/up-vendor-stacks.sh` — and 3000 is often taken |
+| Langfuse | http://localhost:3300 | needs `./scripts/up-vendor-stacks.sh` (3000 is usually taken, hence 3300) |
 
 The last three publish their own compose files and are **not** started by
 `docker compose up -d`. On a network with TLS inspection the fetch may be

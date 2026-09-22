@@ -15,7 +15,8 @@
 set -euo pipefail
 
 ACTION="${1:-up}"
-VENDOR_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/.vendor"
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+VENDOR_DIR="$ROOT_DIR/.vendor"
 mkdir -p "$VENDOR_DIR"
 
 fetch() {
@@ -24,79 +25,175 @@ fetch() {
   # bash declares every name before assigning any of them, so $name is still
   # unset when $dest expands and `set -u` aborts with "name: unbound variable".
   local name="$1"
-  local url="$2"
+  local repo="$2"
+  local path="$3"
   local dest="$VENDOR_DIR/$name.yml"
-  if [ ! -f "$dest" ]; then
-    echo "→ fetching $name compose file"
-    # -f matters: without it a proxy block page or a 404 would be written to
-    # $dest and docker compose would try to parse HTML as YAML.
-    local status
-    status=$(curl -sSL -o "$dest" -w '%{http_code}' "$url" 2>/dev/null) || status=000
-    if [ "$status" != "200" ]; then
-      rm -f "$dest"
-      echo "  could not fetch $name — HTTP $status" >&2
-      if [ "$status" = "403" ] || [ "$status" = "407" ]; then
-        echo "  a 403/407 here is usually a corporate proxy serving a block page," >&2
-        echo "  not the project refusing you. Download the file on a machine that" >&2
-        echo "  can reach GitHub and drop it at:" >&2
-      else
-        echo "  check the project's current quickstart, then drop the file at:" >&2
-      fi
-      echo "    $dest" >&2
-      echo "  or override the URL: ${name^^}_COMPOSE_URL=<url> $0 up" >&2
-      return 1
+  local override_var="${name^^}_COMPOSE_URL"
+  local override="${!override_var:-}"
+
+  [ -f "$dest" ] && { echo "  $name: $dest (cached)"; return 0; }
+  echo "→ fetching $name compose file"
+
+  local status
+  if [ -n "$override" ]; then
+    status=$(curl -sSL -o "$dest" -w '%{http_code}' "$override" 2>/dev/null) || status=000
+  else
+    # Via the GitHub contents API, NOT raw.githubusercontent.com.
+    # TLS-inspecting proxies routinely block the raw host while allowing
+    # api.github.com — measured on this network: raw 403, api 200. The API
+    # returns JSON with the file base64-encoded in .content.
+    local tmp="$dest.json"
+    status=$(curl -sSL -o "$tmp" -w '%{http_code}' \
+      -H 'Accept: application/vnd.github+json' \
+      "https://api.github.com/repos/$repo/contents/$path" 2>/dev/null) || status=000
+    if [ "$status" = "200" ]; then
+      python3 - "$tmp" "$dest" <<'PYEOF' || status=decode-failed
+import base64, json, sys
+with open(sys.argv[1]) as fh:
+    doc = json.load(fh)
+open(sys.argv[2], "w").write(base64.b64decode(doc["content"]).decode())
+PYEOF
     fi
-    # A YAML compose file starts with a key, never with markup.
-    if head -c 200 "$dest" | grep -qi '<!doctype\|<html'; then
-      rm -f "$dest"
-      echo "  $name download returned HTML, not YAML — almost certainly a proxy" >&2
-      echo "  block page. Fetch it by hand and drop it at $dest" >&2
-      return 1
-    fi
+    rm -f "$tmp"
+  fi
+
+  if [ "$status" != "200" ]; then
+    rm -f "$dest"
+    echo "  could not fetch $name — $status" >&2
+    case "$status" in
+      403|407)
+        echo "  a 403/407 is usually a proxy block page, not the project refusing" >&2
+        echo "  you. If api.github.com is blocked too, fetch the file elsewhere." >&2 ;;
+      404)
+        echo "  the path moved. Find the current one in the project's repo:" >&2
+        echo "    https://github.com/$repo" >&2 ;;
+    esac
+    echo "  drop it at:  $dest" >&2
+    echo "  or override: $override_var=<url> $0 up" >&2
+    return 1
+  fi
+
+  # A compose file starts with a key, never with markup.
+  if head -c 200 "$dest" | grep -qi '<!doctype\|<html'; then
+    rm -f "$dest"
+    echo "  $name returned HTML, not YAML — almost certainly a block page." >&2
+    echo "  Fetch it by hand and drop it at $dest" >&2
+    return 1
   fi
   echo "  $name: $dest"
 }
 
-# ⚠️ These URLs were correct at design time but are the vendors' to change.
-# If a fetch fails, take the current URL from the project's quickstart docs.
-AGENTREGISTRY_URL="${AGENTREGISTRY_COMPOSE_URL:-https://raw.githubusercontent.com/agentregistry-dev/agentregistry/main/agentregistry-compose.yml}"
-AGENTCONTROL_URL="${AGENTCONTROL_COMPOSE_URL:-https://raw.githubusercontent.com/agentcontrol/agent-control/refs/heads/main/docker-compose.yml}"
-LANGFUSE_URL="${LANGFUSE_COMPOSE_URL:-https://raw.githubusercontent.com/langfuse/langfuse/main/docker-compose.yml}"
+# repo + path within the repo. Resolved through the GitHub contents API above.
+# ⚠️ These are the vendors' to move. A 404 means the path changed, not that the
+# network is broken — agentregistry's was already wrong here, pointing at
+# `agentregistry-compose.yml` in the repo root, which has never existed.
+AGENTREGISTRY_REPO="agentregistry-dev/agentregistry"; AGENTREGISTRY_PATH="docker/docker-compose.yml"
+AGENTCONTROL_REPO="agentcontrol/agent-control";       AGENTCONTROL_PATH="docker-compose.yml"
+LANGFUSE_REPO="langfuse/langfuse";                    LANGFUSE_PATH="docker-compose.yml"
 
 case "$ACTION" in
   up)
-    fetch agentregistry "$AGENTREGISTRY_URL" || true
-    fetch agentcontrol  "$AGENTCONTROL_URL"  || true
-    fetch langfuse      "$LANGFUSE_URL"      || true
+    fetch agentregistry "$AGENTREGISTRY_REPO" "$AGENTREGISTRY_PATH" || true
+    fetch agentcontrol  "$AGENTCONTROL_REPO"  "$AGENTCONTROL_PATH"  || true
+    fetch langfuse      "$LANGFUSE_REPO"      "$LANGFUSE_PATH"      || true
+
+    # Port remaps live in an override file rather than as edits to the fetched
+    # vendor compose, so deleting .vendor/*.yml and re-fetching cannot silently
+    # revert them.
+    cat > "$VENDOR_DIR/langfuse.override.yml" <<YAML
+# Generated by scripts/up-vendor-stacks.sh — do not edit, it is overwritten.
+services:
+  # Langfuse publishes 3000, which Grafana, dev servers and plenty else claim.
+  # `!override` replaces the upstream list; a plain `ports:` would MERGE, so the
+  # container would try to bind 3000 as well and fail on the clash we are
+  # avoiding.
+  langfuse-web:
+    ports: !override
+      - "\${LANGFUSE_PORT:-3300}:3000"
+    # Headless initialization: creates the org, project, user and API keys on
+    # first boot, so the keys in .env are valid immediately and nobody has to
+    # click through the UI to obtain them. Ignored once those objects exist.
+    environment:
+      LANGFUSE_INIT_ORG_ID: \${LANGFUSE_INIT_ORG_ID:-agentmesh}
+      LANGFUSE_INIT_ORG_NAME: \${LANGFUSE_INIT_ORG_NAME:-AgentMesh}
+      LANGFUSE_INIT_PROJECT_ID: \${LANGFUSE_INIT_PROJECT_ID:-agentmesh}
+      LANGFUSE_INIT_PROJECT_NAME: \${LANGFUSE_INIT_PROJECT_NAME:-AgentMesh}
+      LANGFUSE_INIT_PROJECT_PUBLIC_KEY: \${LANGFUSE_INIT_PROJECT_PUBLIC_KEY:-}
+      LANGFUSE_INIT_PROJECT_SECRET_KEY: \${LANGFUSE_INIT_PROJECT_SECRET_KEY:-}
+      LANGFUSE_INIT_USER_EMAIL: \${LANGFUSE_INIT_USER_EMAIL:-}
+      LANGFUSE_INIT_USER_NAME: \${LANGFUSE_INIT_USER_NAME:-AgentMesh Admin}
+      LANGFUSE_INIT_USER_PASSWORD: \${LANGFUSE_INIT_USER_PASSWORD:-}
+
+  # The upstream file uses cgr.dev/chainguard/minio, whose blobs are served from
+  # r2.cloudflarestorage.com — blocked by some TLS-inspecting proxies, giving
+  #   failed to copy: ... 403 Forbidden
+  # after the manifest has already been fetched, so it looks like a transient
+  # pull failure rather than a policy block. quay.io/minio/minio is the upstream
+  # MinIO image and pulls cleanly. Entrypoint and command are restated because
+  # replacing the image does not carry them over.
+  minio:
+    image: \${LANGFUSE_MINIO_IMAGE:-quay.io/minio/minio:latest}
+    entrypoint: sh
+    command: -c 'mkdir -p /data/langfuse && minio server --address ":9000" --console-address ":9001" /data'
+
+  # Langfuse's own Postgres, ClickHouse and Redis publish host ports that other
+  # stacks routinely hold — 5432 especially. Nothing outside the Langfuse
+  # network needs them: langfuse-web and langfuse-worker reach them by service
+  # name. `!reset` clears the upstream list rather than appending to it.
+  postgres:
+    ports: !reset []
+  clickhouse:
+    ports: !reset []
+  redis:
+    ports: !reset []
+YAML
 
     for stack in agentregistry agentcontrol langfuse; do
       file="$VENDOR_DIR/$stack.yml"
       [ -f "$file" ] || { echo "skipping $stack (no compose file)"; continue; }
       echo "→ starting $stack"
-      # Agent Control's UI defaults to 4000, which agentgateway already owns.
-      if [ "$stack" = "agentcontrol" ]; then
-        AGENT_CONTROL_UI_PORT=4001 docker compose -p "$stack" -f "$file" up -d
-      else
-        docker compose -p "$stack" -f "$file" up -d
-      fi
+      # --env-file is explicit: compose otherwise looks for .env beside the
+      # compose file, which is .vendor/, not the repository root.
+      local_args=(-p "$stack" --env-file "$ROOT_DIR/.env" -f "$file")
+      # `|| true` per stack: one product failing to start must not abort the
+      # others under `set -e`. agentregistry, for instance, requires a VERSION
+      # release tag that nothing here supplies yet.
+      case "$stack" in
+        langfuse)
+          docker compose "${local_args[@]}" -f "$VENDOR_DIR/langfuse.override.yml" up -d \
+            || echo "  $stack failed to start — see the error above" >&2 ;;
+        agentcontrol)
+          # Agent Control's UI defaults to 4000, which agentgateway already owns.
+          AGENT_CONTROL_UI_PORT=4001 docker compose "${local_args[@]}" up -d \
+            || echo "  $stack failed to start — see the error above" >&2 ;;
+        *)
+          docker compose "${local_args[@]}" up -d \
+            || echo "  $stack failed to start — see the error above" >&2 ;;
+      esac
     done
 
-    cat <<'EOF'
+    cat <<BANNER
 
 Vendor stacks starting. Once healthy:
   agentregistry  http://localhost:12121
   Agent Control  http://localhost:4001   (API http://localhost:8000)
-  Langfuse       http://localhost:3000
+  Langfuse       http://localhost:${LANGFUSE_PORT:-3300}
 
-Next: create a Langfuse project, then put its keys in .env as
-LANGFUSE_BASIC_AUTH=$(printf 'pk-...:sk-...' | base64) so the OTel collector
-can forward traces.
-EOF
+Langfuse needs one manual step that cannot be scripted: sign in, create a
+project, and copy its API keys. Then, from the repository root:
+
+  echo "LANGFUSE_BASIC_AUTH=\$(printf 'pk-lf-...:sk-lf-...' | base64 -w0)" >> .env
+  docker compose restart otel-collector
+
+Until that is done the collector logs one export failure per batch, which is
+expected — traces are received and scrubbed regardless, they just have nowhere
+to land.
+BANNER
     ;;
   down)
     for stack in agentregistry agentcontrol langfuse; do
       file="$VENDOR_DIR/$stack.yml"
-      [ -f "$file" ] && docker compose -p "$stack" -f "$file" down || true
+      [ -f "$file" ] && docker compose -p "$stack" --env-file "$ROOT_DIR/.env" -f "$file" down || true
     done
     ;;
   *)

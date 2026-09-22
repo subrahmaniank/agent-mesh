@@ -11,23 +11,59 @@ processors:
     timeout: 1s
     send_batch_size: 128
 
+  # ── Zero Data Retention, as an ALLOW-LIST ───────────────────────────────────
+  # This used to be a deny-list of six attribute names — gen_ai.prompt,
+  # gen_ai.completion, llm.prompts, llm.completions, input.value, output.value.
+  # agentgateway emits none of them. Its attributes are gen_ai.usage.*, http.*,
+  # agentgateway.user, src.addr. So the scrub deleted nothing and protected
+  # nothing, while the documentation said otherwise.
+  #
+  # `keep_keys` inverts the default. Anything not named below is dropped:
+  # a prompt body under any key, an attribute a future gateway version adds, a
+  # provider-specific field nobody reviewed. Forgetting to add something costs
+  # a missing chart; forgetting to deny something costs a leak.
+  #
+  # Adding a key here is a privacy decision. Check what it can contain first.
   transform:
     error_mode: ignore
     trace_statements:
       - context: span
         statements:
-          # Zero Data Retention: Redact raw message bodies
-          - delete_key(attributes, "gen_ai.prompt")
-          - delete_key(attributes, "gen_ai.completion")
-          - delete_key(attributes, "llm.prompts")
-          - delete_key(attributes, "llm.completions")
-          - delete_key(attributes, "input.value")
-          - delete_key(attributes, "output.value")
-          # agentgateway's token-usage and cost attributes are NOT touched, so
-          # per-session accounting survives redaction — you keep the numbers
-          # without keeping the prompts.
+          - >-
+            keep_keys(attributes, [
+              "gen_ai.usage.input_tokens",
+              "gen_ai.usage.output_tokens",
+              "gen_ai.usage.cache_read.input_tokens",
+              "gen_ai.request.model",
+              "gen_ai.response.model",
+              "gen_ai.provider.name",
+              "gen_ai.operation.name",
+              "agentgateway.user",
+              "http.status",
+              "http.method",
+              "duration"
+            ])
+          # Deliberately NOT kept, and why:
+          #   src.addr        the calling client's IP — personal data under GDPR.
+          #                   The gateway also strips it at source; see
+          #                   config.tracing.fields.remove. It stays in the local
+          #                   request-log database for debugging.
+          #   http.path       can carry identifiers in a path segment.
+          #   http.host       reveals deployment topology, no analytical value.
+          #   user_agent.name fingerprinting surface.
+          #   jwt.sub         duplicates agentgateway.user.
+          #   route, endpoint internal topology, including backend addresses.
           - set(attributes["privacy.sanitized"], "true")
-          - set(attributes["platform.version"], "v2.0.0")
+      # Resource attributes travel with every span and were never scrubbed at
+      # all — the old config had no `context: resource` block. An SDK puts host
+      # names, process command lines and container ids here by default.
+      - context: resource
+        statements:
+          - >-
+            keep_keys(attributes, [
+              "service.name",
+              "service.version"
+            ])
 
 exporters:
   # Langfuse accepts OTLP over HTTP ONLY — it has no gRPC endpoint, so an

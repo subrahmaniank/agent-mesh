@@ -51,19 +51,89 @@ in `.env`, defaulting to 4317/4318. This machine remaps them to 14317/14318
 because Grafana Alloy owns the defaults. That remap is for host access only;
 inside the compose network the collector is always `otel-collector:4317`.
 
+## Why the scrub had to be rebuilt
+
+The original transform deleted six attributes — `gen_ai.prompt`,
+`gen_ai.completion`, `llm.prompts`, `llm.completions`, `input.value`,
+`output.value`. **agentgateway emits none of them.** Its attributes are
+`gen_ai.usage.*`, `http.*`, `agentgateway.user`, `src.addr`. The scrub deleted
+nothing, and the documentation said it protected you.
+
+Nothing was leaking — the gateway does not put prompt content on spans by
+default — but a control aimed at names that do not exist is not a control. It is
+now an **allow-list**: `keep_keys` drops every attribute not explicitly named, so
+a prompt body under any key, an attribute a future version adds, or a
+provider-specific field nobody reviewed is dropped by default rather than
+exported by default.
+
+Resource attributes are scrubbed too. The old config had no `context: resource`
+block at all, and SDKs routinely put host names, container ids and process
+command lines there.
+
+Two layers, because one is not enough:
+
+| Layer | Where | What it does |
+|---|---|---|
+| Source | `config.tracing.fields.remove` in `agentgateway/config.yaml` | strips `src.addr` before the span leaves the gateway process |
+| Egress | `keep_keys` in `otel/otel-collector-config.yaml` | drops everything not on the allow-list |
+
+The source layer matters because a second exporter added later would bypass the
+collector, not the gateway.
+
+### What is exported, measured
+
+Verified by setting the collector's `debug` exporter to `verbosity: detailed`,
+sending a request containing a marker string, and reading the exported span:
+
+```
+gen_ai.usage.input_tokens · gen_ai.usage.output_tokens
+gen_ai.usage.cache_read.input_tokens · gen_ai.request.model
+gen_ai.response.model · gen_ai.provider.name · gen_ai.operation.name
+agentgateway.user · http.method · http.status · duration · privacy.sanitized
+resource: service.name · service.version
+```
+
+Gone: `src.addr`, `http.path`, `http.host`, `user_agent.name`, `jwt.sub`,
+`route`, `endpoint`.
+
+And in Langfuse's own store, across all 58 string columns of `events_full`:
+
+```sql
+-- rows containing the marker string: 0
+-- events with non-empty input:       0
+-- events with non-empty output:      0   (of 20 events)
+```
+
+Repeat that check on your own deployment — it is the assertion the whole design
+rests on, and it takes a minute.
+
+### Agent attribution needs one extra line
+
+`agentgateway.user` reaches the request-log database but **not** the OTLP export,
+so a tracing backend has nothing to attribute usage to. `config.tracing.fields.add`
+puts it on the span:
+
+```yaml
+fields:
+  add:
+    agentgateway.user: jwt.sub    # a CEL expression
+```
+
+`jwt.sub` is the validated token's subject — the Cedar principal. An agent
+identifier, not a person.
+
 ## The path out
 
 ```
-agentgateway ──OTLP/gRPC──▶ otel-collector ──OTLP/HTTP──▶ Langfuse :3000
+agentgateway ──OTLP/gRPC──▶ otel-collector ──OTLP/HTTP──▶ Langfuse :3300
 orchestrator ──OTLP/gRPC──▶      │
-remote-runner ─OTLP/gRPC──▶      └─ ZDR transform: prompt and completion bodies
-                                    dropped, token/cost attributes preserved
+remote-runner ─OTLP/gRPC──▶      └─ allow-list: everything not explicitly
+                                    named is dropped; token, cost and model
+                                    attributes are what survive
 ```
 
-`otel/otel-collector-config.yaml` deletes `gen_ai.prompt`, `gen_ai.completion`,
-`llm.prompts`, `llm.completions`, `input.value` and `output.value` before
-anything leaves the collector, and does **not** touch token or cost attributes —
-so you keep per-session accounting without retaining prompt content.
+Langfuse runs as its own compose project, so the collector reaches it over the
+host — `http://host.docker.internal:3300/api/public/otel` — not by service name.
 
 > ⚠️ **Langfuse accepts OTLP over HTTP only.** It has no gRPC endpoint. The
 > exporter must be `otlphttp/langfuse`; an `otlp/` exporter connects and then
@@ -160,30 +230,49 @@ from request_logs group by 1, 2;
 
 ---
 
-## Setup
-
-The request log needs nothing — `docker compose up -d` starts
-`agentgateway-postgres` and the gateway creates its schema.
-
-For Langfuse:
+## Running Langfuse
 
 ```bash
-# 1. Start it — it is not part of `docker compose up -d`
-./scripts/up-vendor-stacks.sh
-
-# 2. Create a project in the Langfuse UI, then:
-echo "LANGFUSE_BASIC_AUTH=$(printf 'pk-lf-...:sk-lf-...' | base64 -w0)" >> .env
-docker compose restart otel-collector
+./scripts/up-vendor-stacks.sh          # not part of `docker compose up -d`
+docker compose restart otel-collector  # pick up LANGFUSE_BASIC_AUTH
 ```
 
-Until Langfuse is up, the collector logs an export failure per batch:
+Then open http://localhost:3300 — the login is `LANGFUSE_INIT_USER_EMAIL` /
+`LANGFUSE_INIT_USER_PASSWORD` from `.env`.
 
-```
-error  Exporting failed. Dropping data.  {"name": "otlphttp/langfuse", ...}
+Six containers: `langfuse-web`, `langfuse-worker`, `clickhouse`, `redis`,
+`minio`, `postgres`. Four things about running it here were not obvious:
+
+| | |
+|---|---|
+| **Fetching the compose file** | `raw.githubusercontent.com` is blocked by TLS-inspecting proxies. The script uses the GitHub **contents API** instead — `api.github.com` is reachable where the raw host is not |
+| **Port 3000** | claimed by Grafana and much else. Remapped to `LANGFUSE_PORT` (3300) through `.vendor/langfuse.override.yml`, which the script regenerates — so re-fetching the vendor file cannot silently revert it |
+| **The minio image** | upstream uses `cgr.dev/chainguard/minio`, whose blobs come from `r2.cloudflarestorage.com` and 403 behind the proxy *after* the manifest has already downloaded, so it looks transient. Substituted with `quay.io/minio/minio` |
+| **Credentials** | `DATABASE_URL` is read directly and defaults to the stock `postgres:postgres`. Setting `POSTGRES_PASSWORD` alone gives Prisma `P1001: Can't reach database server`, which reads as a network fault and is actually auth |
+
+Secrets are generated into `.env`. Langfuse's compose ships insecure defaults for
+every one of them, which is how a self-hosted deployment ends up open.
+
+### No click-through needed
+
+`LANGFUSE_INIT_*` provisions the organisation, project, user and API keys on
+first boot, so `LANGFUSE_BASIC_AUTH` is valid immediately. Without those
+variables you must sign in, create a project by hand and paste its keys back.
+
+### Langfuse v4 stores events, not legacy traces
+
+`GET /api/public/traces` returns `0` even when ingestion is working. v4 writes to
+`events_core` / `events_full` in ClickHouse; the legacy tables stay empty. Check
+ingestion there, not through that endpoint:
+
+```bash
+docker exec langfuse-clickhouse-1 clickhouse-client \
+  --password "$CLICKHOUSE_PASSWORD" -q "select count() from default.events_full"
 ```
 
-That is expected and harmless — traces are still received and still visible via
-the `debug` exporter. It is noise, not damage.
+Before Langfuse is up the collector logs one export failure per batch. That is
+expected — traces are still received and scrubbed, they just have nowhere to
+land.
 
 ## Using AgentOps instead
 
@@ -194,9 +283,14 @@ unchanged.
 
 ## What is not wired
 
-- **Langfuse is not running** on this deployment, so per-session grouping in a
-  UI is unproven. The gateway→collector hop **is** verified: `trace_id` appears
-  in the request log and the collector receives the batch.
+- **Metrics.** The collector has only a `traces` pipeline. agentgateway exposes
+  Prometheus metrics on its stats listener (`:15020`, unpublished) and nothing
+  scrapes them. This cannot be fixed by pointing them at Langfuse — Langfuse
+  ingests traces, not Prometheus metrics. It needs a Prometheus service and a
+  `prometheus` receiver in the collector, which is a separate decision.
+- **The workers only emit while working.** `orchestrator` and `remote-runner`
+  produce spans during workflow execution, so an idle stack shows gateway traces
+  only. Not a fault.
 - **No Prometheus/Grafana.** agentgateway exposes a token-usage metric and a
   stats listener, but nothing scrapes it.
 - **Agent Control has its own audit log** of policy triggers. No single pane

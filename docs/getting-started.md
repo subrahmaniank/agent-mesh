@@ -73,19 +73,22 @@ blank page at these URLs is expected rather than a fault.
 |---|---|---|
 | agentregistry | http://localhost:12121 | Catalogue and approvals |
 | Agent Control | http://localhost:4001 | Controls dashboard (API `:8000`) |
-| Langfuse | http://localhost:3000 | Traces, tokens, cost |
+| Langfuse | http://localhost:3300 | Traces, tokens, cost — `LANGFUSE_PORT` |
 
-> **The fetch can be blocked.** The script downloads each project's compose file
-> from GitHub. Behind TLS inspection that returns a proxy block page instead —
-> `curl -f` rejects it, the script reports `could not fetch` and skips the
-> stack, so nothing starts and nothing is corrupted. Workaround: download the
-> files by hand and drop them at `.vendor/{agentregistry,agentcontrol,langfuse}.yml`,
-> or point the script elsewhere with `AGENTREGISTRY_COMPOSE_URL`,
-> `AGENTCONTROL_COMPOSE_URL`, `LANGFUSE_COMPOSE_URL`.
+> **The fetch goes through the GitHub contents API**, not
+> `raw.githubusercontent.com`, because TLS-inspecting proxies routinely block
+> the raw host while allowing `api.github.com`. If your network blocks both,
+> download the files by hand into
+> `.vendor/{agentregistry,agentcontrol,langfuse}.yml`, or point the script
+> elsewhere with `AGENTREGISTRY_COMPOSE_URL`, `AGENTCONTROL_COMPOSE_URL`,
+> `LANGFUSE_COMPOSE_URL`.
 >
-> **Langfuse wants port 3000**, which Grafana, a dev server or another stack
-> very often already owns. Check with `ss -lntp | grep :3000` before starting
-> it, and remap in the vendor compose file if it is taken.
+> **agentregistry additionally needs a `VERSION`** release tag, which nothing
+> here supplies yet — it will fail to start while the other two come up.
+>
+> **Langfuse is remapped to 3300** because 3000 is so often taken. The script
+> writes `.vendor/langfuse.override.yml` to do it, so re-fetching the vendor
+> compose cannot revert it. Change `LANGFUSE_PORT` in `.env` to move it.
 
 > **Ports.** Every published port is overridable in `.env` — `GATEWAY_PORT`,
 > `OTEL_GRPC_PORT` and friends. 4000, 4317/4318 and 3000 are claimed by a lot of
