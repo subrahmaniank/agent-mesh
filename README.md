@@ -142,13 +142,19 @@ unregistered model is denied exactly like an unapproved agent.
 Behind a TLS-inspecting proxy, drop your corporate root CA into `certs/` before
 building — see [`certs/README.md`](certs/README.md).
 
-| UI | URL |
-|---|---|
-| agentgateway admin + LLM playground | http://localhost:15000 |
-| agentregistry | http://localhost:12121 |
-| Agent Control | http://localhost:4001 |
-| Langfuse | http://localhost:3000 |
-| Temporal | http://localhost:8233 |
+| UI | URL | Status |
+|---|---|---|
+| agentgateway admin | http://localhost:15000 | **up** with `docker compose up -d` |
+| Temporal | http://localhost:8233 | **up** with `docker compose up -d` |
+| agentregistry | http://localhost:12121 | needs `./scripts/up-vendor-stacks.sh` |
+| Agent Control | http://localhost:4001 | needs `./scripts/up-vendor-stacks.sh` |
+| Langfuse | http://localhost:3000 | needs `./scripts/up-vendor-stacks.sh` — and 3000 is often taken |
+
+The last three publish their own compose files and are **not** started by
+`docker compose up -d`. On a network with TLS inspection the fetch may be
+blocked outright — it returns a proxy block page rather than the file — in which
+case download each project's compose file by hand into `.vendor/`. See
+[`docs/getting-started.md`](docs/getting-started.md).
 
 Full walkthrough: [`docs/getting-started.md`](docs/getting-started.md).
 

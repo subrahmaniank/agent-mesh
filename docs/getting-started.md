@@ -50,15 +50,38 @@ docker exec agentmesh_ollama ollama pull llama3
 # then set OLLAMA_BASE_URL=http://ollama:11434/v1
 ```
 
+### Started by `docker compose up -d`
+
 | Service | URL | What it is |
 |---|---|---|
-| agentgateway admin + playground | http://localhost:15000 | Gateway config, LLM playground |
 | agentgateway API | `$GATEWAY` (4000 default, 4100 here) | OpenAI-compatible endpoint |
+| agentgateway admin | http://localhost:15000 | Gateway config and status (redirects to `/ui`) |
+| Temporal | http://localhost:8233 | Workflows and sagas |
+| cedar-agent | http://localhost:8180 | Cedar PDP (`/rapidoc` for its API explorer) |
+
+### Started by `./scripts/up-vendor-stacks.sh`
+
+These three publish their own compose files and are deliberately not copied into
+`docker-compose.yml`. **They are not running unless you run that script**, so a
+blank page at these URLs is expected rather than a fault.
+
+| Service | URL | What it is |
+|---|---|---|
 | agentregistry | http://localhost:12121 | Catalogue and approvals |
 | Agent Control | http://localhost:4001 | Controls dashboard (API `:8000`) |
 | Langfuse | http://localhost:3000 | Traces, tokens, cost |
-| Temporal | http://localhost:8233 | Workflows and sagas |
-| cedar-agent | http://localhost:8180 | Cedar PDP (`/rapidoc` for its API explorer) |
+
+> **The fetch can be blocked.** The script downloads each project's compose file
+> from GitHub. Behind TLS inspection that returns a proxy block page instead —
+> `curl -f` rejects it, the script reports `could not fetch` and skips the
+> stack, so nothing starts and nothing is corrupted. Workaround: download the
+> files by hand and drop them at `.vendor/{agentregistry,agentcontrol,langfuse}.yml`,
+> or point the script elsewhere with `AGENTREGISTRY_COMPOSE_URL`,
+> `AGENTCONTROL_COMPOSE_URL`, `LANGFUSE_COMPOSE_URL`.
+>
+> **Langfuse wants port 3000**, which Grafana, a dev server or another stack
+> very often already owns. Check with `ss -lntp | grep :3000` before starting
+> it, and remap in the vendor compose file if it is taken.
 
 > **Ports.** Every published port is overridable in `.env` — `GATEWAY_PORT`,
 > `OTEL_GRPC_PORT` and friends. 4000, 4317/4318 and 3000 are claimed by a lot of
@@ -201,6 +224,8 @@ uv run pytest tests/ -q          # 52 passing, no Docker needed
 | `503 upstream call failed` | authorization passed; the backend is unreachable | this is the platform working — fix the model backend |
 | Ordinary prompts rejected as PII | `PRESIDIO_ENTITIES` empty means *every* entity; spaCy tags "France" as `LOCATION` | keep the curated default list |
 | `presidio-analyzer` exits code 3 | its registry YAML replaces the defaults and needs a top-level `recognizers:` key | see the header of `presidio/conf/recognizers.yaml` |
+| `http://localhost:15000` hangs or returns nothing | the admin UI binds `127.0.0.1` inside the container by default, so the published port maps to nothing | `config.adminAddr: "0.0.0.0:15000"` in `agentgateway/config.yaml` — already set |
+| agentregistry / Agent Control / Langfuse blank | they are not started by `docker compose up -d` | `./scripts/up-vendor-stacks.sh`, and see the note about blocked downloads above |
 | otel-collector won't start on an unset variable | older collectors can't expand `${env:VAR:-default}` | already fixed by pinning 0.119.0 |
 
 ## Verifying the security model

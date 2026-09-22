@@ -19,14 +19,40 @@ VENDOR_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/.vendor"
 mkdir -p "$VENDOR_DIR"
 
 fetch() {
-  local name="$1" url="$2" dest="$VENDOR_DIR/$name.yml"
+  # Separate `local` statements on purpose. In a single
+  #   local name="$1" dest="...$name..."
+  # bash declares every name before assigning any of them, so $name is still
+  # unset when $dest expands and `set -u` aborts with "name: unbound variable".
+  local name="$1"
+  local url="$2"
+  local dest="$VENDOR_DIR/$name.yml"
   if [ ! -f "$dest" ]; then
     echo "→ fetching $name compose file"
-    curl -fsSL "$url" -o "$dest" || {
-      echo "  could not fetch $name from $url" >&2
-      echo "  check the project's current quickstart and drop the file at $dest" >&2
+    # -f matters: without it a proxy block page or a 404 would be written to
+    # $dest and docker compose would try to parse HTML as YAML.
+    local status
+    status=$(curl -sSL -o "$dest" -w '%{http_code}' "$url" 2>/dev/null) || status=000
+    if [ "$status" != "200" ]; then
+      rm -f "$dest"
+      echo "  could not fetch $name — HTTP $status" >&2
+      if [ "$status" = "403" ] || [ "$status" = "407" ]; then
+        echo "  a 403/407 here is usually a corporate proxy serving a block page," >&2
+        echo "  not the project refusing you. Download the file on a machine that" >&2
+        echo "  can reach GitHub and drop it at:" >&2
+      else
+        echo "  check the project's current quickstart, then drop the file at:" >&2
+      fi
+      echo "    $dest" >&2
+      echo "  or override the URL: ${name^^}_COMPOSE_URL=<url> $0 up" >&2
       return 1
-    }
+    fi
+    # A YAML compose file starts with a key, never with markup.
+    if head -c 200 "$dest" | grep -qi '<!doctype\|<html'; then
+      rm -f "$dest"
+      echo "  $name download returned HTML, not YAML — almost certainly a proxy" >&2
+      echo "  block page. Fetch it by hand and drop it at $dest" >&2
+      return 1
+    fi
   fi
   echo "  $name: $dest"
 }

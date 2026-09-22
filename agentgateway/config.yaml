@@ -16,6 +16,19 @@
 # accepted alternatives, which is how the enums documented below were found.
 # ─────────────────────────────────────────────────────────────────────────────
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Process-level settings.
+#
+# adminAddr: the admin UI binds 127.0.0.1:15000 by default — loopback *inside
+# the container*, which means the published port maps to nothing and
+# http://localhost:15000 simply hangs. Binding 0.0.0.0 is what makes it
+# reachable, exactly as cedar-agent needs `--addr 0.0.0.0:8180` for the same
+# reason. Only expose it on a trusted network: it is an admin surface with no
+# authentication of its own.
+# ─────────────────────────────────────────────────────────────────────────────
+config:
+  adminAddr: "0.0.0.0:15000"
+
 llm:
   # Policies shared by every backend below. Declaring them once is what stops a
   # newly added provider from quietly bypassing the controls.
