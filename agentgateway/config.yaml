@@ -62,13 +62,20 @@ llm:
 
   models:
 
-    # ── Local. No credential required — the platform runs without any cloud
-    #    account, and an agent can be pinned to this backend by Cedar policy.
-    # [check] ollama param name (host vs url).
+    # ── Self-hosted Ollama. No credential required — the platform runs without
+    #    any cloud account, and an agent can be pinned to this backend by Cedar
+    #    policy (see `pii-handler` in cedar/entities.json).
+    #
+    #    baseUrl is a FULL URL including scheme and the /v1 suffix, not a
+    #    host:port pair. Set OLLAMA_BASE_URL in .env to point at wherever the
+    #    server actually runs — another machine, this Docker host, or the
+    #    optional in-compose service. agentgateway defaults to
+    #    http://localhost:11434/v1 if omitted, which inside a container means
+    #    the container itself, so this is effectively required.
     - name: "llama3*"
       provider: ollama
       params:
-        host: "ollama:11434"
+        baseUrl: "$OLLAMA_BASE_URL"
 
     # ── OpenAI [verified]
     - name: "gpt-*"

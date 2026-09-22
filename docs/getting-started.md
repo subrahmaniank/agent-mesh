@@ -1,7 +1,7 @@
 # Getting started
 
-The stack runs with **no cloud credentials** — the default LLM backend is a
-local Ollama. Cloud providers are additive.
+The stack runs with **no cloud credentials** — the default LLM backend is your
+own Ollama, wherever it runs. Cloud providers are additive.
 
 ---
 
@@ -14,15 +14,33 @@ local Ollama. Cloud providers are additive.
 
 ```bash
 cp .env.example .env
+```
 
-# Components configured in this repo
-docker compose up -d
+Set `OLLAMA_BASE_URL` to wherever your Ollama server runs. It is a **full URL,
+including the scheme and the `/v1` suffix** — agentgateway's ollama provider
+takes a base URL, not a `host:port` pair:
 
-# Products that publish their own compose files
-./scripts/up-vendor-stacks.sh
+| Ollama location | `OLLAMA_BASE_URL` |
+|---|---|
+| Another machine | `http://192.168.1.20:11434/v1` |
+| This Docker host | `http://host.docker.internal:11434/v1` |
+| In-compose (below) | `http://ollama:11434/v1` |
 
-# Pull a local model
+> Ollama binds to `127.0.0.1` by default. A server on another machine needs
+> `OLLAMA_HOST=0.0.0.0` set **on that machine**, or the gateway's connection is
+> refused.
+
+```bash
+docker compose up -d            # components configured in this repo
+./scripts/up-vendor-stacks.sh   # products with their own compose files
+```
+
+If you'd rather run Ollama here than point at an existing one:
+
+```bash
+docker compose --profile local-llm up -d
 docker exec agentmesh_ollama ollama pull llama3
+# then set OLLAMA_BASE_URL=http://ollama:11434/v1
 ```
 
 | Service | URL | What it is |
@@ -95,9 +113,14 @@ where a documented shape may differ from the shipped build.
 
 1. **Does agentgateway accept the config?**
    `docker compose logs agentgateway`. Entries marked `[check]` in
-   `agentgateway/config.yaml` are inferred — the regex-guard fields, the Ollama
-   param name, `mcp.targets`, the `ui` block, and where `extAuthz` attaches.
-   Validate against `https://agentgateway.dev/schema/config`.
+   `agentgateway/config.yaml` are inferred — the regex-guard fields,
+   `mcp.targets`, the `ui` block, and where `extAuthz` attaches. Validate
+   against `https://agentgateway.dev/schema/config`.
+
+   Also confirm the gateway can reach Ollama:
+   `docker compose exec agentgateway wget -qO- $OLLAMA_BASE_URL/models`.
+   A refused connection usually means Ollama is bound to `127.0.0.1` on its
+   host rather than `0.0.0.0`.
 
 2. **⚠️ Can a client forge the agent identity header?**
    The single most important check. cedar-shim trusts the header agentgateway

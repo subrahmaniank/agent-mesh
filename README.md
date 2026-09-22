@@ -64,7 +64,7 @@ change:
 ```yaml
 llm:
   models:
-    - { name: "llama3*",  provider: ollama, params: { host: "ollama:11434" } }
+    - { name: "llama3*",  provider: ollama, params: { baseUrl: "$OLLAMA_BASE_URL" } }
     - { name: "gpt-*",    provider: openAI, params: { apiKey: "$OPENAI_API_KEY" } }
     - { name: "claude-*", provider: azure,  params: { azureResourceType: foundry } }
 ```
@@ -76,8 +76,8 @@ Ollama, vLLM and LM Studio, and any OpenAI-compatible endpoint. Guardrails,
 authorization and telemetry apply to **every** entry, so adding a provider never
 widens the trust boundary.
 
-**The default backend is a local Ollama, so the platform runs with no cloud
-credentials at all.**
+**The default backend is your own Ollama — set `OLLAMA_BASE_URL` in `.env` to
+wherever it runs — so the platform works with no cloud credentials at all.**
 
 ## Why an unregistered agent is inert
 
@@ -97,12 +97,16 @@ An unapproved agent can run — and gets no model, no tools, no data.
 ## Quickstart
 
 ```bash
-cp .env.example .env          # every value optional; Ollama needs none
+cp .env.example .env
+# Point OLLAMA_BASE_URL at your Ollama server — full URL, including /v1:
+#   OLLAMA_BASE_URL=http://192.168.1.20:11434/v1
 
-docker compose up -d          # gateway, cedar, presidio, ollama, temporal, otel
+docker compose up -d          # gateway, cedar, presidio, temporal, otel
 ./scripts/up-vendor-stacks.sh # agentregistry, Agent Control, Langfuse
 
-docker exec agentmesh_ollama ollama pull llama3
+# No Ollama of your own? Run one in-compose instead:
+#   docker compose --profile local-llm up -d
+#   OLLAMA_BASE_URL=http://ollama:11434/v1
 
 curl -X POST localhost:4000/v1/chat/completions \
   -H 'Content-Type: application/json' \

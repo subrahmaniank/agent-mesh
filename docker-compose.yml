@@ -26,8 +26,11 @@ services:
     volumes:
       - ./agentgateway/config.yaml:/config.yaml:ro
     environment:
+      # Where Ollama actually runs — another machine, this Docker host, or the
+      # optional in-compose service below. Full URL with scheme and /v1.
+      - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-http://host.docker.internal:11434/v1}
       # Provider credentials. Absent ones simply leave that backend unusable;
-      # the local Ollama backend needs none of them.
+      # the Ollama backend needs none of them.
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
       - AZURE_API_KEY=${AZURE_API_KEY:-}
@@ -40,9 +43,12 @@ services:
       - "4000:4000"      # gateway + LLM playground
       - "15000:15000"    # admin UI
     depends_on:
+      # Not ollama: it may be on another machine, and is opt-in here.
       - cedar-shim
       - presidio-adapter
-      - ollama
+    extra_hosts:
+      # Lets OLLAMA_BASE_URL reach a server on the Docker host itself.
+      - "host.docker.internal:host-gateway"
     networks: [agentmesh]
 
   # ─────────────────────────────────────────────────────────────────────
@@ -127,11 +133,18 @@ services:
     networks: [agentmesh]
 
   # ─────────────────────────────────────────────────────────────────────
-  # A local LLM backend, so the whole platform runs with no cloud keys
+  # Optional in-compose Ollama, for when you don't already have one.
+  #
+  #   docker compose --profile local-llm up -d
+  #   OLLAMA_BASE_URL=http://ollama:11434/v1   (in .env)
+  #
+  # Omitted from the default `up` because Ollama usually already runs
+  # elsewhere — point OLLAMA_BASE_URL at it instead.
   # ─────────────────────────────────────────────────────────────────────
   ollama:
     image: ollama/ollama:latest
     container_name: agentmesh_ollama
+    profiles: [local-llm]
     volumes:
       - ollama-models:/root/.ollama
     ports:
