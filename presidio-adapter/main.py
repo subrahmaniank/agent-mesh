@@ -16,10 +16,34 @@ THE CONTRACT (confirmed from agentgateway's own JEV guardrail example)
 
     ⚠️ The vendor docs disagree on whether a webhook may MASK: the guardrails
     overview lists webhook actions as reject/audit, while the Guardrail Webhook
-    API describes Pass/Mask/Reject. GUARDRAIL_ACTION defaults to `reject`
-    because that is what "PII must never be sent" actually requires, and it
-    works under either reading. Set GUARDRAIL_ACTION=mask only after confirming
-    masking is honoured by your agentgateway build.
+    API describes Pass/Mask/Reject. v1.5.0 accepts only reject|audit —
+    `action: mask` is rejected at config parse time — so a webhook cannot
+    redact. Masking is the regex layer's job.
+
+WHAT THIS ADAPTER CANNOT DO, AND WHY
+    It cannot vary its strictness by destination. Screening ought to be harsher
+    for a call leaving the premises than for one to an on-prem model, but the
+    envelope agentgateway sends is exactly:
+
+        {"body": {"messages": [...]}}          keys verified at runtime
+
+    No model, no route, no metadata — and the webhook's `headers:` field did not
+    arrive either. Three other routes were tried and rejected:
+
+      * per-model `guardrails:` blocks parse and do apply, but not to every
+        message role. With top-level `reject` and per-model `audit`, PII in a
+        `user` turn passed while the same text in a `system` or `assistant` turn
+        was rejected. Any agent framework accumulates assistant turns, so a
+        conversation cannot be governed from there.
+      * `headers: {x-agentmesh-model: llm.model}` validates but never reaches
+        this endpoint.
+      * the request body would carry `model`, but the guardrail envelope strips
+        everything except `messages`.
+
+    So destination-based screening needs either a second adapter instance wired
+    to hosted model entries, or a gateway version that passes route context.
+    Until then PRESIDIO_ENTITIES is global, and Cedar's `allowed_model_tiers` is
+    what actually keeps an agent's traffic on-premises.
 """
 
 import json
@@ -30,13 +54,24 @@ import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlsplit, urlunsplit
 
+def _csv(name: str, default: str = "") -> list:
+    return [v.strip() for v in os.getenv(name, default).split(",") if v.strip()]
+
+
 ANALYZER_URL = os.getenv("PRESIDIO_ANALYZER_URL", "http://presidio-analyzer:3000")
 ANONYMIZER_URL = os.getenv("PRESIDIO_ANONYMIZER_URL", "http://presidio-anonymizer:3000")
 LISTEN_PORT = int(os.getenv("LISTEN_PORT", "8080"))
 ACTION = os.getenv("GUARDRAIL_ACTION", "reject").strip().lower()
 SCORE_THRESHOLD = float(os.getenv("PRESIDIO_SCORE_THRESHOLD", "0.5"))
 LANGUAGE = os.getenv("PRESIDIO_LANGUAGE", "en")
-ENTITIES = [e for e in os.getenv("PRESIDIO_ENTITIES", "").split(",") if e.strip()]
+ENTITIES = _csv("PRESIDIO_ENTITIES")
+
+
+# Log which span of which message tripped the guard. Off by default: it writes
+# the detected value to the log, which is the thing we are trying not to spread
+# around. Indispensable when a framework's prompt is blocked and you cannot see
+# what the framework actually sent.
+DEBUG_MATCHES = os.getenv("ADAPTER_DEBUG_MATCHES", "") == "1"
 MAX_BODY = 4 * 1024 * 1024
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s presidio-adapter %(message)s")
@@ -105,10 +140,10 @@ def set_at(body: dict, path, value) -> None:
     node[path[-1]] = value
 
 
-def analyze(text: str):
+def analyze(text: str, entities=None):
     payload = {"text": text, "language": LANGUAGE}
-    if ENTITIES:
-        payload["entities"] = ENTITIES
+    if entities:
+        payload["entities"] = entities
     findings = post_json(ANALYZE, payload)
     return [f for f in findings if float(f.get("score", 0)) >= SCORE_THRESHOLD]
 
@@ -133,15 +168,23 @@ def inspect(envelope: dict) -> dict:
         return pass_action("no inspectable content")
 
     hits, masked_any = [], False
+    matches: list[tuple[str, str]] = []
     body = envelope.get("body") or {}
+
 
     for path, text in texts:
         if not text.strip():
             continue
-        findings = analyze(text)
+        findings = analyze(text, ENTITIES)
         if not findings:
             continue
         hits.extend(sorted({f.get("entity_type", "UNKNOWN") for f in findings}))
+        if DEBUG_MATCHES:
+            matches.extend(
+                (f"{'.'.join(str(x) for x in path)}:{f.get('entity_type')}",
+                 text[f.get("start", 0):f.get("end", 0)])
+                for f in findings
+            )
         if ACTION == "mask":
             set_at(body, path, anonymize(text, findings))
             masked_any = True
@@ -155,7 +198,15 @@ def inspect(envelope: dict) -> dict:
         # Mask shape: the modified body is returned for agentgateway to forward.
         return {"action": {"body": body, "reason": f"masked: {', '.join(entities)}"}}
 
-    log.info("REJECT entities=%s", entities)
+    # "PII-FOUND", not "REJECT": this returns a rejection *envelope*, but whether
+    # it blocks anything is the gateway's call — a webhook configured
+    # `action: audit` logs the finding and forwards the call regardless. Saying
+    # REJECT here made successful requests look blocked in the logs.
+    log.info("PII-FOUND entities=%s (blocks only where the webhook action is `reject`)",
+             entities)
+    if DEBUG_MATCHES:
+        for where, what in matches:
+            log.info("  match %s -> %r", where, what)
     return reject_action(
         f"PII detected: {', '.join(entities)}",
         f"Request blocked: content contains {', '.join(entities)}.",
@@ -196,6 +247,11 @@ class Handler(BaseHTTPRequestHandler):
             self._send(reject_action("malformed guardrail envelope", "Blocked."))
             return
 
+        if DEBUG_MATCHES:
+            log.info("envelope %s keys=%s body_keys=%s headers=%s", self.path,
+                     sorted(envelope.keys()),
+                     sorted((envelope.get("body") or {}).keys()),
+                     json.dumps(dict(self.headers.items()))[:400])
         try:
             self._send(inspect(envelope))
         except Exception as exc:

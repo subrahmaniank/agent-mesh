@@ -150,3 +150,27 @@ def test_no_policy_evaluation_errors_anywhere():
         for tool in ("search_docs", "query_database", "drop_table"):
             for hitl in (True, False):
                 assert decide(agent, "call_tool", tool, hitl)[1] == []
+
+
+# --- onboarded frameworks -----------------------------------------------------
+
+def test_crewai_sample_reaches_the_local_model_it_actually_asks_for():
+    """CrewAI sends the model name verbatim, tag included. `gemma4` and
+    `gemma4:latest` are different Cedar resources, and only the registered
+    spelling is permitted -- which is the mechanism that stops an agent using a
+    model nobody approved."""
+    assert allow("crewai-sample-01", "call_model", "gemma4:latest") == "Allow"
+
+
+def test_crewai_sample_cannot_reach_a_hosted_model():
+    """The containment the PII story leans on. Name-level NER is deliberately
+    not in PRESIDIO_ENTITIES because it cannot survive a multi-turn agent, so
+    what actually keeps this crew's accumulated research context on-premises is
+    this denial -- see presidio-adapter/main.py."""
+    assert allow("crewai-sample-01", "call_model", "gpt-4.1") == "Deny"
+
+
+def test_crewai_sample_has_no_tool_role():
+    """The crew attaches no tools; custom_tool.py is an unused scaffold. Grant
+    `tool-user` when one is actually wired, not before."""
+    assert allow("crewai-sample-01", "call_tool", "search_docs") == "Deny"

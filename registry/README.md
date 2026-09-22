@@ -70,3 +70,16 @@ MCP servers are registry artifacts too. Once approved, add the server to the
 `AgentMesh::Tool` entity in `cedar/entities.json`. A server that is not in
 `mcp.targets` has no route, and a tool with no Cedar entity has no permit —
 both are denials, from different directions.
+
+## Pending publication
+
+Registered as Cedar principals and running through the gateway, but not yet in
+the catalogue — agentregistry has not been started here:
+
+| Agent id | What it is | Cedar grant |
+|---|---|---|
+| `crewai-sample-01` | CrewAI crew at `~/Developer/samples/crewai_sample_01` | `model-user`, local tier only |
+
+When agentregistry comes up, publish these with `arctl` and reconcile
+`registry_status` against what the catalogue says rather than the hand-set
+`"approved"` in `cedar/entities.json`.

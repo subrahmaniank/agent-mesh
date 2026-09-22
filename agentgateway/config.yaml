@@ -62,17 +62,21 @@ llm:
 
       response:
         # The completion is screened on the way back too — a model can echo or
-        # infer PII that was never in the prompt.
+        # infer PII that was never in the prompt. Identifiers are still masked.
         - regex:
             action: mask
             rules:
               - builtin: ssn
               - builtin: creditCard
               - builtin: phoneNumber
+        # `audit`, not `reject`: this direction is inbound. The requirement is
+        # that PII is not *sent* anywhere, and a model naming a public figure
+        # back to us is not egress. Rejecting here also made multi-turn agents
+        # unusable — "Name the CEO of OpenAI" returned 403 PERSON.
         - webhook:
             target:
               host: presidio-adapter:8080
-            action: reject
+            action: audit
             failureMode: failClosed
 
     # ── Authentication: who is calling ──────────────────────────────────────
@@ -183,6 +187,20 @@ llm:
     #    actually runs. agentgateway defaults to http://localhost:11434/v1,
     #    which inside a container means the container itself — so this is
     #    effectively required.
+    #
+    #    ── Where PII screening is decided ────────────────────────────────────
+    #    Not here. agentgateway supports a per-model `guardrails:` block, and it
+    #    looked like the right place to relax screening for an on-premises
+    #    backend — but it does not cover every message role. A per-model
+    #    `action: audit` applies to the user turn while `system` and `assistant`
+    #    turns still fall through to llm.policies.guardrails above, so a
+    #    multi-turn conversation is ungovernable from there. Verified against
+    #    v1.5.0: PII in a `user` message audited, the same text in an
+    #    `assistant` message rejected.
+    #
+    #    presidio-adapter therefore makes the decision, using the `model` field
+    #    it already receives — see HOSTED_MODEL_PREFIXES in
+    #    presidio-adapter/main.py.
     - name: "*"
       provider: ollama
       params:

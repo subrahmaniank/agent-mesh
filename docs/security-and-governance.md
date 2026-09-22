@@ -95,12 +95,40 @@ Three things worth knowing:
   `failClosed` | `failOpen`. Both request and response guards set `failClosed`:
   if Presidio is down, the call does not proceed unscreened.
 
-- **The entity list is a deliberate trade.** `PRESIDIO_ENTITIES` is curated
-  rather than empty, because empty means every entity Presidio knows — and
-  spaCy tags "France" in *"What is the capital of France?"* as `LOCATION`. The
-  default excludes `LOCATION`, `DATE_TIME`, `NRP` and `URL`. The cost: a bare
-  street address with no name attached is not caught. Add `LOCATION` back if
-  that trade is wrong for your data.
+- **The entity list is a deliberate trade, and `PERSON` is the expensive part.**
+  `PRESIDIO_ENTITIES` is curated rather than empty, because empty means every
+  entity Presidio knows — spaCy tags "France" in *"What is the capital of
+  France?"* as `LOCATION`. Excluded: `LOCATION`, `DATE_TIME`, `NRP`, `URL`, and
+  `PERSON`.
+
+  `PERSON` was excluded after it made a real agent unusable. spaCy read "MoE"
+  (mixture of experts) as a person's name, and because a sequential crew feeds
+  each task's output into the next task's prompt, one false positive aborted the
+  run on its second task. Name-level NER has too many false positives to gate
+  traffic on, and in a multi-turn agent every false positive is fatal.
+
+  What still holds the line is **Cedar, not Presidio**: an agent with
+  `allowed_model_tiers: ["local"]` cannot reach a hosted provider whatever its
+  prompt contains. Containment by destination, not detection by content.
+
+  The cost is real and worth stating: a person's name typed into a prompt bound
+  for a cloud provider is no longer blocked. Restore `PERSON` to
+  `PRESIDIO_ENTITIES` if you accept the false positives.
+
+### Why screening cannot follow the destination
+
+The natural design is to screen harshly for calls leaving the premises and
+lightly for on-prem ones. agentgateway v1.5.0 does not permit it. Verified:
+
+| Attempt | Outcome |
+|---|---|
+| Read `model` from the guardrail envelope | envelope is exactly `{"body": {"messages": [...]}}` — no model, no route |
+| Per-model `guardrails:` blocks | parse and apply, **but not to every message role**: with top-level `reject` and per-model `audit`, PII in a `user` turn passed and the same text in a `system` or `assistant` turn was rejected |
+| `headers: {x-agentmesh-model: llm.model}` on the webhook | validates, never arrives |
+
+Any agent framework accumulates `assistant` turns, so the per-model route cannot
+govern a conversation. Making this work needs a second adapter instance wired to
+the hosted model entries, or a gateway that passes route context to the webhook.
 
 ### Fail closed
 

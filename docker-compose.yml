@@ -144,12 +144,27 @@ services:
       # which is what "PII never leaves" actually requires.
       - GUARDRAIL_ACTION=${GUARDRAIL_ACTION:-reject}
       - PRESIDIO_SCORE_THRESHOLD=${PRESIDIO_SCORE_THRESHOLD:-0.5}
-      # Which Presidio entities cause a rejection. Empty would mean "all", and
-      # all is unusable: spaCy tags "France" in "What is the capital of France?"
-      # as LOCATION, so every third prompt gets blocked. LOCATION, DATE_TIME,
-      # NRP and URL are therefore excluded by default — add LOCATION back if
-      # bare street addresses matter more to you than false positives.
-      - PRESIDIO_ENTITIES=${PRESIDIO_ENTITIES:-PERSON,EMAIL_ADDRESS,PHONE_NUMBER,US_SSN,US_ITIN,US_PASSPORT,US_DRIVER_LICENSE,US_BANK_NUMBER,CREDIT_CARD,IBAN_CODE,CRYPTO,MEDICAL_LICENSE,UK_NHS,IP_ADDRESS,INTERNAL_EMPLOYEE_ID}
+      # Which Presidio entities cause a rejection.
+      #
+      # Empty would mean "all", and all is unusable: spaCy tags "France" in
+      # "What is the capital of France?" as LOCATION. Excluded for that reason:
+      # LOCATION, DATE_TIME, NRP, URL.
+      #
+      # PERSON is excluded too, and that one is a real trade. Name-level NER
+      # cannot survive a multi-turn agent — spaCy read "MoE" (mixture of
+      # experts) as a person and killed a CrewAI run on its second task, because
+      # each task's output becomes the next task's prompt. Ideally strictness
+      # would follow the destination, but the guardrail webhook receives only
+      # `{"body": {"messages": [...]}}` and cannot tell where a call is going;
+      # see the header of presidio-adapter/main.py. What keeps an agent's
+      # traffic on-premises is Cedar's allowed_model_tiers, not this list.
+      #
+      # Everything below is a hard identifier that regex or pattern matching
+      # gets right, so false positives are rare and blocking is safe.
+      - PRESIDIO_ENTITIES=${PRESIDIO_ENTITIES:-EMAIL_ADDRESS,PHONE_NUMBER,US_SSN,US_ITIN,US_PASSPORT,US_DRIVER_LICENSE,US_BANK_NUMBER,CREDIT_CARD,IBAN_CODE,CRYPTO,MEDICAL_LICENSE,UK_NHS,IP_ADDRESS,INTERNAL_EMPLOYEE_ID}
+      # 1 logs the matched span, so you can see what a framework actually sent
+      # when its prompt is blocked. Writes detected values to the log.
+      - ADAPTER_DEBUG_MATCHES=${ADAPTER_DEBUG_MATCHES:-0}
     # Not published, for the same reason as cedar-shim: only the gateway calls
     # it, and 8080 clashes with almost everything.
     expose:

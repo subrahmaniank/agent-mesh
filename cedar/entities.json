@@ -198,5 +198,24 @@
       "_comment": "The Temporal workers' own identity. Local models only: the control plane should not be the thing that reaches a cloud provider."
     },
     "parents": []
+  },
+  {
+    "uid": {
+      "type": "AgentMesh::Agent",
+      "id": "crewai-sample-01"
+    },
+    "attrs": {
+      "registry_status": "approved",
+      "tenant": "acme",
+      "clearance": 2,
+      "roles": [
+        "model-user"
+      ],
+      "allowed_model_tiers": [
+        "local"
+      ],
+      "_comment": "CrewAI research crew at ~/Developer/samples/crewai_sample_01. Local tier only: a sequential crew feeds each task's output into the next task's prompt, so research context accumulates in the request body -- fine on-premises, not something to hand a hosted provider. `tool-user` is deliberately absent: the crew attaches no tools yet."
+    },
+    "parents": []
   }
 ]
