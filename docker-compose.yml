@@ -1,0 +1,248 @@
+# AgentMesh — platform assembled from open-source products.
+#
+# This file owns the components we configure directly. Three products publish
+# their own compose files and are brought up alongside rather than hand-copied
+# here, because duplicating a vendor's internals invites drift:
+#
+#   agentregistry  → see scripts/up-vendor-stacks.sh  (UI :12121)
+#   Agent Control  → see scripts/up-vendor-stacks.sh  (server :8000, UI :4001)
+#   Langfuse       → see scripts/up-vendor-stacks.sh  (UI :3000)
+#
+# Everything here runs credential-free: the default LLM backend is a local
+# Ollama. Cloud providers are additive — put keys in .env and they appear in
+# agentgateway/config.yaml.
+
+name: agentmesh
+
+services:
+
+  # ─────────────────────────────────────────────────────────────────────
+  # Data path — every LLM, MCP and tool call goes through here
+  # ─────────────────────────────────────────────────────────────────────
+  agentgateway:
+    image: cr.agentgateway.dev/agentgateway:v1.5.0
+    container_name: agentmesh_gateway
+    command: ["-f", "/config.yaml"]
+    volumes:
+      - ./agentgateway/config.yaml:/config.yaml:ro
+    environment:
+      # Provider credentials. Absent ones simply leave that backend unusable;
+      # the local Ollama backend needs none of them.
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - AZURE_API_KEY=${AZURE_API_KEY:-}
+      - AZURE_FOUNDRY_RESOURCE=${AZURE_FOUNDRY_RESOURCE:-}
+      - AZURE_FOUNDRY_PROJECT=${AZURE_FOUNDRY_PROJECT:-}
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+      - GROQ_API_KEY=${GROQ_API_KEY:-}
+      - MISTRAL_API_KEY=${MISTRAL_API_KEY:-}
+    ports:
+      - "4000:4000"      # gateway + LLM playground
+      - "15000:15000"    # admin UI
+    depends_on:
+      - cedar-shim
+      - presidio-adapter
+      - ollama
+    networks: [agentmesh]
+
+  # ─────────────────────────────────────────────────────────────────────
+  # Identity & policy — real Cedar, in a real PDP
+  # ─────────────────────────────────────────────────────────────────────
+  cedar-agent:
+    image: permitio/cedar-agent:latest
+    container_name: agentmesh_cedar_agent
+    # Bind to all interfaces; the image defaults to 127.0.0.1, which would be
+    # unreachable from other containers.
+    command: ["--addr", "0.0.0.0:8180"]
+    ports:
+      - "8180:8180"
+    networks: [agentmesh]
+
+  # Translates agentgateway's extAuthz (any 2xx = allow) into a Cedar decision.
+  cedar-shim:
+    build: ./cedar-shim
+    container_name: agentmesh_cedar_shim
+    environment:
+      - CEDAR_AGENT_URL=http://cedar-agent:8180
+      - LISTEN_PORT=9000
+    ports:
+      - "9000:9000"
+    depends_on:
+      - cedar-agent
+    networks: [agentmesh]
+
+  # Loads cedar/ schema, policies and entities into cedar-agent on startup,
+  # then exits. Re-run with `docker compose up cedar-loader` after edits.
+  cedar-loader:
+    image: curlimages/curl:8.11.1
+    container_name: agentmesh_cedar_loader
+    volumes:
+      - ./cedar:/cedar:ro
+      - ./scripts/load-cedar.sh:/load-cedar.sh:ro
+    entrypoint: ["sh", "/load-cedar.sh"]
+    environment:
+      - CEDAR_AGENT_URL=http://cedar-agent:8180
+    depends_on:
+      - cedar-agent
+    restart: on-failure
+    networks: [agentmesh]
+
+  # ─────────────────────────────────────────────────────────────────────
+  # PII — detection (Presidio) behind agentgateway's guardrail webhook
+  # ─────────────────────────────────────────────────────────────────────
+  presidio-analyzer:
+    image: mcr.microsoft.com/presidio-analyzer:latest
+    container_name: agentmesh_presidio_analyzer
+    environment:
+      - RECOGNIZER_REGISTRY_CONF_FILE=/app/conf/recognizers.yaml
+    volumes:
+      - ./presidio/conf/recognizers.yaml:/app/conf/recognizers.yaml:ro
+    ports:
+      - "5001:3000"
+    networks: [agentmesh]
+
+  presidio-anonymizer:
+    image: mcr.microsoft.com/presidio-anonymizer:latest
+    container_name: agentmesh_presidio_anonymizer
+    ports:
+      - "5002:3000"
+    networks: [agentmesh]
+
+  presidio-adapter:
+    build: ./presidio-adapter
+    container_name: agentmesh_presidio_adapter
+    environment:
+      - PRESIDIO_ANALYZER_URL=http://presidio-analyzer:3000
+      - PRESIDIO_ANONYMIZER_URL=http://presidio-anonymizer:3000
+      - LISTEN_PORT=8080
+      # reject | mask — see presidio-adapter/README.md. Defaults to reject,
+      # which is what "PII never leaves" actually requires.
+      - GUARDRAIL_ACTION=${GUARDRAIL_ACTION:-reject}
+      - PRESIDIO_SCORE_THRESHOLD=${PRESIDIO_SCORE_THRESHOLD:-0.5}
+    ports:
+      - "8080:8080"
+    depends_on:
+      - presidio-analyzer
+      - presidio-anonymizer
+    networks: [agentmesh]
+
+  # ─────────────────────────────────────────────────────────────────────
+  # A local LLM backend, so the whole platform runs with no cloud keys
+  # ─────────────────────────────────────────────────────────────────────
+  ollama:
+    image: ollama/ollama:latest
+    container_name: agentmesh_ollama
+    volumes:
+      - ollama-models:/root/.ollama
+    ports:
+      - "11434:11434"
+    networks: [agentmesh]
+
+  # ─────────────────────────────────────────────────────────────────────
+  # Durable orchestration
+  # ─────────────────────────────────────────────────────────────────────
+  temporal:
+    image: temporalio/auto-setup:1.24.2
+    container_name: agentmesh_temporal
+    environment:
+      - DB=postgres12
+      - DB_PORT=5432
+      - POSTGRES_USER=temporal
+      - POSTGRES_PWD=temporal
+      - POSTGRES_SEEDS=temporal-postgres
+    ports:
+      - "7233:7233"
+    depends_on:
+      temporal-postgres:
+        condition: service_healthy
+    networks: [agentmesh]
+
+  temporal-ui:
+    image: temporalio/ui:latest
+    container_name: agentmesh_temporal_ui
+    environment:
+      - TEMPORAL_ADDRESS=temporal:7233
+      - TEMPORAL_CORS_ORIGINS=http://localhost:8233
+    ports:
+      - "8233:8080"
+    depends_on:
+      - temporal
+    networks: [agentmesh]
+
+  temporal-postgres:
+    image: postgres:16-alpine
+    container_name: agentmesh_temporal_postgres
+    environment:
+      - POSTGRES_USER=temporal
+      - POSTGRES_PASSWORD=temporal
+      - POSTGRES_DB=temporal
+    volumes:
+      - temporal-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U temporal"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks: [agentmesh]
+
+  orchestrator:
+    build:
+      context: .
+      dockerfile: orchestrator/Dockerfile
+    container_name: agentmesh_orchestrator
+    environment:
+      - TEMPORAL_HOST=temporal:7233
+      - TEMPORAL_NAMESPACE=default
+      - GATEWAY_URL=http://agentgateway:4000
+      - GATEWAY_TOKEN=${GATEWAY_TOKEN:-dev-operator-token}
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317
+    depends_on:
+      - temporal
+      - agentgateway
+    networks: [agentmesh]
+
+  # Agent plane: outbound-only, no published ports.
+  remote-runner:
+    build:
+      context: .
+      dockerfile: remote_runner/Dockerfile
+    container_name: agentmesh_remote_runner
+    environment:
+      - TEMPORAL_HOST=temporal:7233
+      - TEMPORAL_NAMESPACE=default
+      - GATEWAY_URL=http://agentgateway:4000
+      - GATEWAY_TOKEN=${GATEWAY_TOKEN:-dev-operator-token}
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317
+    depends_on:
+      - temporal
+      - agentgateway
+    networks: [agentmesh]
+
+  # ─────────────────────────────────────────────────────────────────────
+  # Telemetry — strips prompt bodies, forwards to Langfuse over OTLP/HTTP
+  # ─────────────────────────────────────────────────────────────────────
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.100.0
+    container_name: agentmesh_otel_collector
+    command: ["--config=/etc/otel-collector-config.yaml"]
+    environment:
+      # Langfuse accepts OTLP over HTTP only (no gRPC). Basic auth is
+      # base64("public_key:secret_key") from a Langfuse project.
+      - LANGFUSE_OTLP_ENDPOINT=${LANGFUSE_OTLP_ENDPOINT:-http://host.docker.internal:3000/api/public/otel}
+      - LANGFUSE_BASIC_AUTH=${LANGFUSE_BASIC_AUTH:-}
+    volumes:
+      - ./otel/otel-collector-config.yaml:/etc/otel-collector-config.yaml:ro
+    ports:
+      - "4317:4317"
+      - "4318:4318"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    networks: [agentmesh]
+
+volumes:
+  temporal-pgdata:
+  ollama-models:
+
+networks:
+  agentmesh:
+    driver: bridge

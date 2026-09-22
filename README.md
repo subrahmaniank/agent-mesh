@@ -1,224 +1,166 @@
-# AgentMesh: Enterprise Agent Platform
+# AgentMesh
 
-[![Python](https://img.shields.io/badge/Python-3.11%20%7C%203.12-blue.svg)](https://python.org)
-[![Temporal](https://img.shields.io/badge/Orchestrator-Temporal-black.svg)](https://temporal.io)
-[![Cedar](https://img.shields.io/badge/Policy%20Engine-Cedar-orange.svg)](https://www.cedarpolicy.com)
-[![Presidio](https://img.shields.io/badge/DLP%20%26%20PII-Microsoft%20Presidio-blue.svg)](https://microsoft.github.io/presidio/)
-[![OpenTelemetry](https://img.shields.io/badge/Observability-OpenTelemetry-purple.svg)](https://opentelemetry.io)
-[![Tests](https://img.shields.io/badge/Tests-8%20Passed-brightgreen.svg)]()
+An agent platform **assembled from open-source products**, not written from
+scratch. Agents are catalogued and approved in a registry; every call they make
+— LLM, MCP or tool — goes through one gateway that authenticates them,
+authorizes with Cedar, screens for PII, and records tokens and cost.
 
-**AgentMesh** is an enterprise-grade, secure, durable, and modular platform for deploying, governing, and orchestrating autonomous AI agents across heterogeneous frameworks (CrewAI, LangGraph, AutoGen, and custom REST microservices).
+> ### ⚠️ Status: configured, not yet run
+> The stack below has **not been started** — no Docker daemon was available in
+> the environment where it was assembled. Configuration shapes came from vendor
+> documentation and are marked `[check]` where inferred. What *has* been
+> verified, with tests you can run right now, is in
+> [What is actually verified](#what-is-actually-verified).
+>
+> A previous iteration hand-wrote a Python substitute for agentgateway and
+> labelled it "AgentGateway.dev". That implementation is preserved on the
+> `custom-python-gateway` branch — see [`docs/current-state.md`](docs/current-state.md).
 
 ---
 
-## Architecture at a Glance
+## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                    Central Control Plane                    │
-│        Agent Registry  │  HITL Approvals  │  Cedar PAP      │
-└──────────────────────────────┬──────────────────────────────┘
-                               │
-        ┌──────────────────────┴──────────────────────┐
-        ▼                                             ▼
-┌──────────────────────────────┐              ┌──────────────────────────────┐
-│      Temporal Cluster        │              │       AgentGateway.dev       │
-│ (Durable Orchestration/Sagas)│              │  (PEP / In-Memory Cedar PDP) │
-└──────────────┬───────────────┘              └──────────────┬───────────────┘
-               │ Outbound Long-Polling                       │ MCP / REST / SSE
-               │ (Zero Inbound Ports)                        │ (Sanitized Payloads)
-               ▼                                             ▼
-┌──────────────────────────────┐              ┌──────────────────────────────┐
-│  Remote Worker Sandboxes     │              │    Target Services & MCP     │
-│ (LangGraph, CrewAI, AutoGen) │─────────────▶│ (Postgres, Internal APIs)    │
-└──────────────┬───────────────┘              └──────────────────────────────┘
+  agentregistry :12121          catalogue · versions · publishers · APPROVAL
+        │ approved artifact → Cedar principal
+        ▼
+   agent ──▶ agentgateway :4000  (admin UI :15000)
                │
-               │ OTLP Telemetry (W3C Trace Context)
-               ▼
-┌──────────────────────────────┐
-│    OTel Collector Contrib    │
-│  (Transform: PII Strip/Hash) │
-└──────────────┬───────────────┘
-               │
-        ┌──────┴──────┐
-        ▼             ▼
-┌─────────────┐ ┌─────────────┐
-│ AgentOps.ai │ │   Langfuse  │
-└─────────────┘ └─────────────┘
+               ├─ 1. authn        JWT / API key
+               ├─ 2. authz        extAuthz ─▶ cedar-shim ─▶ cedar-agent :8180
+               ├─ 3. guardrails   regex mask  +  webhook ─▶ presidio-adapter ─▶ Presidio
+               ├─ 4. route        OpenAI · Anthropic · Azure · Bedrock · Vertex
+               │                  Gemini · Groq · Mistral · Ollama · vLLM · …
+               ├─ 5. guardrails   same checks over the response
+               └─ 6. telemetry    OTel ─▶ collector (ZDR) ─▶ Langfuse :3000
+                                          tokens + cost per session
+
+  Agent Control :8000 (UI :4001)  step-level controls inside the agent
+  Temporal :7233 (UI :8233)       durable orchestration, sagas, HITL gates
 ```
 
----
+A tool or MCP call follows the **identical** path; only step 4 differs. One
+authn, one authz, one guardrail pipeline, one telemetry stream — whatever the
+call type.
 
-## Key Platform Capabilities
+## What each product does
 
-- 🛡️ **Sub-Millisecond Policy Guardrails:** Embedded **AWS Cedar** policy engine enforcing fine-grained RBAC/ABAC and OWASP LLM06 destructive invariants before every tool invocation.
-- 🔒 **In-Flight DLP & Privacy:** Real-time **Microsoft Presidio** entity detection and anonymization (SSNs, emails, phones, credit cards) preventing sensitive data leaks.
-- 🌐 **Network Inversion & Zero Inbound Ports:** Remote worker execution powered by an outbound long-polling pull architecture over Temporal.
-- ⏳ **Durable Multi-Agent Orchestration:** **Temporal** state machines with asynchronous Human-in-the-Loop (HITL) approval gates and LIFO Saga compensation rollbacks.
-- 📊 **Decoupled Telemetry Spine:** OpenTelemetry Collector pipeline supporting Zero Data Retention (ZDR) and hot-swappable backends (**Langfuse**, **AgentOps.ai**).
-- 🧩 **Heterogeneous Agent Support:** Plug-and-play integration for **CrewAI**, **LangGraph**, **AutoGen**, and Anthropic **Model Context Protocol (MCP)** tools.
+| Plane | Product | Owns |
+|---|---|---|
+| Catalogue | [agentregistry](https://aregistry.ai) | What exists, versions, publishers, approval |
+| Identity & policy | [cedar-agent](https://github.com/permitio/cedar-agent) | Cedar schema, policies, entity data |
+| Data path | [agentgateway](https://agentgateway.dev) | Every LLM/MCP/tool call |
+| Agent-step policy | [Agent Control](https://agentcontrol.dev) | Controls inside the agent's execution |
+| PII | [Microsoft Presidio](https://microsoft.github.io/presidio/) | NER-grade detection |
+| Observability | [Langfuse](https://langfuse.com) | Traces, tokens, cost per session |
+| Orchestration | [Temporal](https://temporal.io) | Durable workflows, sagas, approval gates |
 
----
+## Any LLM backend, by configuration
 
-## Repository Layout
+Clients always speak one OpenAI-compatible API to `:4000`. Which backend serves
+a request is decided in `agentgateway/config.yaml` by model name — agents never
+change:
 
-```
-agent-mesh/
-├── .antigravity/                   # Antigravity IDE & workflow configuration
-│   └── config.json
-├── docs/                           # Modular documentation & integration guides
-│   ├── architecture.md             # Topology, components & network flows
-│   ├── security-and-governance.md  # Cedar policies, Presidio DLP, ZDR
-│   ├── orchestration-and-hitl.md   # Temporal workflows, HITL, Sagas
-│   ├── observability.md            # OTel Collector, tracing, Langfuse/AgentOps
-│   ├── framework-integrations.md   # CrewAI, LangGraph, AutoGen onboarding
-│   └── getting-started.md          # Setup, commands, testing & verification
-├── gateway/                        # Policy Enforcement Point (PEP) & Cedar PDP
-│   ├── Dockerfile
-│   ├── config.yaml                 # Gateway server, Presidio & OTel config
-│   ├── server.py                   # In-memory Cedar PDP & Presidio DLP server
-│   └── policies/
-│       ├── schema.cedarschema      # Cedar entity & action definitions
-│       └── base_guardrails.cedar   # Clearance & destructive invariants
-├── presidio/                       # Presidio custom recognizers
-│   └── conf/
-│       └── recognizers.yaml
-├── otel/                           # OpenTelemetry Collector configuration
-│   └── otel-collector-config.yaml  # PII stripping transform & exporters
-├── orchestrator/                   # Temporal orchestration workers & activities
-│   ├── requirements.txt
-│   ├── worker.py                   # Orchestrator worker entrypoint
-│   ├── workflows/
-│   │   ├── __init__.py
-│   │   ├── hitl_approval.py        # Asynchronous HITL approval workflow
-│   │   └── multi_agent_dag.py      # Multi-agent DAG with Saga rollbacks
-│   └── activities/
-│       ├── __init__.py
-│       ├── gateway_client.py       # Activity invocations & human approvals
-│       └── compensations.py        # Automated saga rollback activities
-├── remote_runner/                  # Remote worker runtime plane
-│   ├── Dockerfile
-│   ├── requirements.txt
-│   ├── runner_shim.py              # UniversalAgentShim adapter
-│   └── worker_poll.py              # Outbound Temporal long-poller
-├── portal/                         # Unified Web Control Portal & Dashboards
-│   ├── server.py                   # Portal HTTP host
-│   └── index.html                  # Interactive UI, Cedar sandbox & onboarding wizard
-├── tests/                          # Automated verification & evaluation suite
-│   ├── requirements-test.txt
-│   ├── conftest.py
-│   ├── unit/
-│   │   ├── test_cedar_policies.py  # Cedar RBAC/ABAC unit tests
-│   │   └── test_gateway_routing.py # Universal shim routing unit tests
-│   └── evals/
-│       ├── test_pii_leakage.py     # Presidio PII sanitization eval
-│       └── test_hallucination_grounding.py # Hallucination & grounding eval
-├── docker-compose.infra.yml        # Storage, Temporal, Presidio, OTel, Redis, Gateway
-├── implementation_plan.md          # 6-Phase build & verification specification
-├── .env.example                    # Environment template
-└── README.md                       # Main documentation portal
+```yaml
+llm:
+  models:
+    - { name: "llama3*",  provider: ollama, params: { host: "ollama:11434" } }
+    - { name: "gpt-*",    provider: openAI, params: { apiKey: "$OPENAI_API_KEY" } }
+    - { name: "claude-*", provider: azure,  params: { azureResourceType: foundry } }
 ```
 
----
+agentgateway supports 20+ providers natively — OpenAI, Anthropic, Azure (OpenAI
+*and* AI Foundry), Bedrock, Gemini, Vertex, xAI, Cohere, Mistral, DeepSeek,
+Groq, Together, Fireworks, OpenRouter, HuggingFace and more — plus self-hosted
+Ollama, vLLM and LM Studio, and any OpenAI-compatible endpoint. Guardrails,
+authorization and telemetry apply to **every** entry, so adding a provider never
+widens the trust boundary.
 
-## Detailed Documentation
+**The default backend is a local Ollama, so the platform runs with no cloud
+credentials at all.**
 
-| Guide | Description |
-| :--- | :--- |
-| 🚀 [**Agent Onboarding Guide**](docs/agent-onboarding-guide.md) | End-to-end guide to register, configure IAM/Cedar, setup OTel/DLP, and run a new agent. |
-| 📐 [**System Architecture**](docs/architecture.md) | In-depth topology, network inversion, and component breakdown. |
-| 🛡️ [**Security & Governance**](docs/security-and-governance.md) | Cedar policy schema, guardrail rules, Presidio DLP, and Zero Data Retention. |
-| ⏳ [**Orchestration & HITL**](docs/orchestration-and-hitl.md) | Temporal workflows, async approval gates, and Saga compensation rollbacks. |
-| 📊 [**Observability & Analytics**](docs/observability.md) | OpenTelemetry Collector configuration, backend swapping, and trace propagation. |
-| 🤖 [**Framework Integrations**](docs/framework-integrations.md) | Step-by-step guide to onboard CrewAI, LangGraph, and AutoGen agents. |
-| 🛠️ [**Getting Started & Verification**](docs/getting-started.md) | Prerequisites, environment setup, running workers, and test verification. |
+## Why an unregistered agent is inert
 
----
+A registry records intent; it cannot stop a process from starting. Enforcement
+is the choke point:
+
+| Attempt | Stopped by |
+|---|---|
+| No credential | agentgateway → 401 |
+| Stolen credential, no Cedar principal | cedar-agent → Deny → 403 |
+| Registered but no role for that model | Cedar → Deny → 403 |
+| MCP server not in `mcp.targets` | no route |
+| Prompt contains PII | masked, or rejected |
+
+An unapproved agent can run — and gets no model, no tools, no data.
 
 ## Quickstart
 
-### 1. Environment & Dependencies
 ```bash
-# Copy environment configuration
-cp .env.example .env
+cp .env.example .env          # every value optional; Ollama needs none
 
-# Create and activate virtual environment
-uv venv .venv
+docker compose up -d          # gateway, cedar, presidio, ollama, temporal, otel
+./scripts/up-vendor-stacks.sh # agentregistry, Agent Control, Langfuse
 
-# On Windows (PowerShell):
-.\.venv\Scripts\activate.ps1
+docker exec agentmesh_ollama ollama pull llama3
 
-# On Linux/macOS:
-source .venv/bin/activate
-
-# Install all runtime, worker, and test dependencies
-uv pip install -r tests/requirements-test.txt -r orchestrator/requirements.txt
+curl -X POST localhost:4000/v1/chat/completions \
+  -H 'Content-Type: application/json' \
+  -H "Authorization: Bearer ${GATEWAY_TOKEN:-dev-operator-token}" \
+  -d '{"model":"llama3","messages":[{"role":"user","content":"hello"}]}'
 ```
 
-### 2. Start Core Infrastructure & Gateway (Docker)
-```bash
-docker compose -f docker-compose.infra.yml up -d
+| UI | URL |
+|---|---|
+| agentgateway admin + LLM playground | http://localhost:15000 |
+| agentregistry | http://localhost:12121 |
+| Agent Control | http://localhost:4001 |
+| Langfuse | http://localhost:3000 |
+| Temporal | http://localhost:8233 |
+
+Full walkthrough: [`docs/getting-started.md`](docs/getting-started.md).
+
+## Repository layout
+
+```
+agentgateway/config.yaml     the substance: backends, guardrails, extAuthz, MCP
+cedar/                       policies.cedar + entities.json (real Cedar)
+cedar-shim/                  extAuthz → Cedar decision            [code]
+presidio-adapter/            guardrail webhook → Presidio         [code]
+orchestrator/                Temporal workflows and activities    [code]
+agentcontrol/controls/       step-level controls (JSON)
+registry/                    how agents get published and approved
+otel/                        ZDR transform + Langfuse exporter
+scripts/                     cedar loader, vendor stack launcher
+tests/                       cedar policies, adapters, Temporal workflows
 ```
 
-#### Service Endpoints & Health Checks
+Three things are code; everything else is configuration.
 
-| Service | Port | Endpoint / Health Check | Purpose |
-| :--- | :--- | :--- | :--- |
-| **Temporal Web UI** | `8233` | [http://localhost:8233](http://localhost:8233) | Multi-agent DAG workflow & Saga visualizer |
-| **Temporal gRPC** | `7233` | `localhost:7233` | Orchestration server gRPC endpoint |
-| **Agent Gateway (PEP)** | `8080` | [http://localhost:8080/healthz](http://localhost:8080/healthz) | In-memory Cedar PDP & Presidio DLP enforcement |
-| **Presidio Analyzer** | `5001` | [http://localhost:5001/health](http://localhost:5001/health) | Sensitive entity & PII analyzer microservice |
-| **Presidio Anonymizer** | `5002` | [http://localhost:5002/health](http://localhost:5002/health) | Structured token & PII masking microservice |
-| **Redis** | `6379` | `localhost:6379` | State cache & temporary key-value store |
-| **OTel Collector** | `4317` / `4318` | `localhost:4317` | Zero Data Retention telemetry transform spine |
+## What is actually verified
 
-### 3. Start Workers & Control Portal
+`uv run pytest tests/ -q` → **46 passing**, no Docker required:
 
-Run the following processes across separate terminals:
+| Suite | Proves |
+|---|---|
+| `tests/cedar/` (13) | The shipped Cedar policies under the real engine: unapproved agents denied, `pii-handler` confined to local models, clearance enforced, the HITL gate flipping deny→allow, tenant isolation, and **zero policy evaluation errors** — Cedar silently skips a rule that raises, so a malformed policy would otherwise vanish unnoticed |
+| `tests/adapters/test_cedar_shim.py` (14) | A Cedar `Deny` returned with HTTP 200 becomes a **403** — without this translation every request would be allowed; plus fail-closed on an unreachable PDP, and that an agent cannot self-approve via headers or body |
+| `tests/adapters/test_presidio_adapter.py` (11) | The agentgateway webhook contract, NER-only entities caught where regex would miss, and **fail-closed when Presidio is down** |
+| `tests/workflows/` (8) | Temporal saga: LIFO compensation, policy denials not retried, partial-compensation recovery, approval signal, SLA timeout |
 
-```bash
-# Terminal 1: Start Orchestrator Worker
-uv run python -m orchestrator.worker
+Not verified: anything needing a running container — gateway config shapes, the
+cedar-agent wire format, the vendor compose files, and the end-to-end request
+path. Those are the first things to exercise once Docker is available; see the
+[first-run checklist](docs/getting-started.md#first-run-checklist).
 
-# Terminal 2: Start Remote Worker Node (Outbound Long-Polling)
-uv run python -m remote_runner.worker_poll
+## Documentation
 
-# Terminal 3: Launch Unified Control Portal
-uv run python -m portal.server
-```
-
-Open [**http://localhost:8000**](http://localhost:8000) in your browser to access the integrated dashboard, agent onboarding wizard, and interactive Cedar sandbox.
-
-### 4. Run Automated Test & Evaluation Suite
-
-```bash
-# Run all tests (unit tests + Presidio DLP & grounding evals)
-uv run pytest tests/ -v
-
-# Run Cedar policy & gateway routing unit tests only
-uv run pytest tests/unit/ -v
-
-# Run Presidio PII & hallucination evaluation tests only
-uv run pytest tests/evals/ -v
-```
-
-### 5. Infrastructure Teardown
-```bash
-docker compose -f docker-compose.infra.yml down
-```
-
----
-
-## Verification Suite
-
-The repository includes a comprehensive unit and evaluation test suite:
-
-- `test_cedar_policies.py`: Asserts clearance enforcement, operator role permissions, and blocks destructive commands without confirmed HITL.
-- `test_gateway_routing.py`: Validates universal agent shim request framing and gateway routing.
-- `test_pii_leakage.py`: Microsoft Presidio post-run assertions detecting unmasked PII and verifying sanitized outputs.
-- `test_hallucination_grounding.py`: Context overlap scoring and hallucination evaluations.
-
-To run the complete verification suite:
-```bash
-uv run pytest tests/ -v
-```
+| Guide | |
+|---|---|
+| [Current state](docs/current-state.md) | What changed from the custom build, and what is not yet wired |
+| [Architecture](docs/architecture.md) | The five planes, request walkthrough, admission control |
+| [Security & governance](docs/security-and-governance.md) | Cedar IAM, the two PII layers and their limits, fail-closed behaviour |
+| [Getting started](docs/getting-started.md) | Setup, first run, verification |
+| [Agent onboarding](docs/agent-onboarding-guide.md) | Publish, approve, grant roles, issue a credential |
+| [Observability](docs/observability.md) | Langfuse wiring, tokens and cost |
+| [Orchestration & HITL](docs/orchestration-and-hitl.md) | Temporal workflows and approval gates |

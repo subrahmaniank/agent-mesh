@@ -1,0 +1,133 @@
+# yaml-language-server: $schema=https://agentgateway.dev/schema/config
+#
+# agentgateway — the single data path for every LLM, MCP and tool call.
+#
+# Clients always speak one OpenAI-compatible API to :4000. Which backend serves
+# a request is decided here by model name, so adding or swapping a provider
+# never touches agent code.
+#
+# ─────────────────────────────────────────────────────────────────────────────
+# VERIFICATION STATUS — this file has NOT been run against agentgateway v1.5.0.
+# Shapes marked [verified] came from the vendor docs during design; those marked
+# [check] are inferred and must be validated on first boot against the schema
+# above (the docs render markdown at any docs URL + ".md").
+# ─────────────────────────────────────────────────────────────────────────────
+
+llm:
+  # Policies shared by every backend below. Declaring them once is what stops a
+  # newly added provider from quietly bypassing the controls.
+  policies:
+
+    # ── Layer 1: mask well-formed PII inline ────────────────────────────────
+    # [check] exact field names for the regex guard. `mask` is the only native
+    # masking action anywhere in this stack, and it does NOT apply to streamed
+    # responses — streaming falls through to the reject layer below.
+    guardrails:
+      request:
+        - regex:
+            action: mask
+            rules:
+              - name: US_SSN
+                pattern: '\b\d{3}-\d{2}-\d{4}\b'
+              - name: CREDIT_CARD
+                pattern: '\b(?:\d{4}[ -]){3}\d{4}\b'
+              - name: EMAIL
+                pattern: '\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b'
+        # ── Layer 2: Presidio NER catches what regex cannot, and rejects ────
+        # [verified] webhook target shape. The adapter implements
+        # POST /request and POST /response.
+        - webhook:
+            target:
+              host: presidio-adapter:8080
+      response:
+        - regex:
+            action: mask
+            rules:
+              - name: US_SSN
+                pattern: '\b\d{3}-\d{2}-\d{4}\b'
+              - name: CREDIT_CARD
+                pattern: '\b(?:\d{4}[ -]){3}\d{4}\b'
+        - webhook:
+            target:
+              host: presidio-adapter:8080
+
+    # ── Cedar IAM, delegated ────────────────────────────────────────────────
+    # [verified] extAuthz shape; [check] that it attaches at this level rather
+    # than on a gateway/route. HTTP protocol chosen deliberately: any 2xx means
+    # allow, which is exactly what cedar-shim translates a Cedar decision into.
+    extAuthz:
+      host: cedar-shim:9000
+      protocol:
+        http: {}
+
+  models:
+
+    # ── Local. No credential required — the platform runs without any cloud
+    #    account, and an agent can be pinned to this backend by Cedar policy.
+    # [check] ollama param name (host vs url).
+    - name: "llama3*"
+      provider: ollama
+      params:
+        host: "ollama:11434"
+
+    # ── OpenAI [verified]
+    - name: "gpt-*"
+      provider: openAI
+      params:
+        apiKey: "$OPENAI_API_KEY"
+
+    # ── Anthropic direct [verified]
+    - name: "claude-*-direct"
+      provider: anthropic
+      params:
+        apiKey: "$ANTHROPIC_API_KEY"
+
+    # ── Anthropic on Azure AI Foundry [verified]
+    #    agentgateway routes claude-* to /anthropic/v1/messages and injects the
+    #    version headers itself — nothing to implement here.
+    - name: "claude-*"
+      provider: azure
+      auth:
+        key:
+          value: "$AZURE_API_KEY"
+          location:
+            header:
+              name: api-key
+      params:
+        azureResourceName: "$AZURE_FOUNDRY_RESOURCE"
+        azureResourceType: foundry
+        azureProjectName: "$AZURE_FOUNDRY_PROJECT"
+
+    # ── Google Gemini [check] param name
+    - name: "gemini-*"
+      provider: gemini
+      params:
+        apiKey: "$GEMINI_API_KEY"
+
+    # ── Groq [check] param name
+    - name: "groq/*"
+      provider: groq
+      params:
+        apiKey: "$GROQ_API_KEY"
+
+    # More providers are a copy of the pattern above: bedrock (auth.aws),
+    # vertex (auth.gcp), mistral, deepseek, together, fireworks, openrouter,
+    # cohere, xai, huggingface, baseten, cerebras, deepinfra, vLLM, LM Studio,
+    # or any OpenAI-compatible endpoint via a custom provider. Guardrails and
+    # extAuthz above apply to every one of them automatically.
+
+# ─────────────────────────────────────────────────────────────────────────────
+# MCP — tools reachable through the same authz and guardrail pipeline.
+# [check] target shape in standalone config. Servers listed here should mirror
+# what is approved in agentregistry; nothing else is routable.
+# ─────────────────────────────────────────────────────────────────────────────
+mcp:
+  targets: []
+    # - name: filesystem
+    #   stdio:
+    #     cmd: npx
+    #     args: ["-y", "@modelcontextprotocol/server-filesystem", "/workspace"]
+
+# Admin UI and LLM playground. [check] field names.
+ui:
+  enabled: true

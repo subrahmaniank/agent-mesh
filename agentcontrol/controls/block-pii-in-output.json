@@ -1,0 +1,26 @@
+{
+  "name": "block-pii-in-output",
+  "description": "Stop an agent step from returning PII. This is the in-agent layer: agentgateway already screens what crosses the wire, but it cannot see a tool result being handed between steps inside the agent's own control flow.",
+  "enabled": true,
+  "execution": "server",
+  "scope": {
+    "step_types": ["tool", "llm"],
+    "stages": ["post"]
+  },
+  "condition": {
+    "selector": { "path": "output" },
+    "evaluator": {
+      "name": "regex",
+      "config": {
+        "pattern": "\\b\\d{3}-\\d{2}-\\d{4}\\b|\\b(?:\\d{4}[ -]){3}\\d{4}\\b"
+      }
+    }
+  },
+  "action": {
+    "decision": "deny",
+    "metadata": {
+      "reason": "Step output contained an SSN or card number",
+      "compliance": "PII protection"
+    }
+  }
+}

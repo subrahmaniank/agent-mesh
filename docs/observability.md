@@ -1,71 +1,68 @@
-# Observability & Analytics Spine
+# Observability — traces, tokens and cost
 
-The telemetry architecture uses **OpenTelemetry (OTel)** with in-flight transformation to support vendor-neutral, zero-data-retention tracing and metrics collection.
+Token usage and cost come from agentgateway itself, so they cover **every**
+model call through the platform regardless of which agent made it or which
+provider served it. No instrumentation in agent code.
 
 ---
 
-## 1. OTel Collector Configuration (`otel/otel-collector-config.yaml`)
+## What agentgateway emits
 
-```yaml
-receivers:
-  otlp:
-    protocols:
-      grpc:
-        endpoint: 0.0.0.0:4317
-      http:
-        endpoint: 0.0.0.0:4318
+| Signal | Where |
+|---|---|
+| `agentgateway_gen_ai_client_token_usage` | Prometheus — input and output tokens per request |
+| Token usage as span attributes | OTel traces |
+| Realized cost in USD | Request logs |
 
-processors:
-  batch:
-    timeout: 1s
-    send_batch_size: 128
+Because these are produced at the gateway, per-session accounting is a property
+of the platform rather than something each agent has to report honestly.
 
-  transform:
-    error_mode: ignore
-    trace_statements:
-      - context: span
-        statements:
-          # Zero Data Retention: Redact raw message bodies
-          - delete_key(attributes, "gen_ai.prompt")
-          - delete_key(attributes, "gen_ai.completion")
-          - delete_key(attributes, "llm.prompts")
-          - delete_key(attributes, "llm.completions")
-          - delete_key(attributes, "input.value")
-          - delete_key(attributes, "output.value")
-          # Retain execution metadata
-          - set(attributes["privacy.sanitized"], "true")
-          - set(attributes["platform.version"], "v1.0.0")
+## The path to Langfuse
 
-exporters:
-  otlp/agentops:
-    endpoint: "https://api.agentops.ai:443"
-    headers:
-      X-Agentops-Api-Key: "${env:AGENTOPS_API_KEY}"
-
-  otlp/langfuse:
-    endpoint: "https://langfuse.internal.net:443"
-    headers:
-      Authorization: "Basic ${env:LANGFUSE_AUTH_TOKEN}"
-
-  logging:
-    verbosity: detailed
-
-service:
-  pipelines:
-    traces:
-      receivers: [otlp]
-      processors: [batch, transform]
-      exporters: [otlp/agentops, logging]
+```
+agentgateway ──OTLP──▶ otel-collector ──OTLP/HTTP──▶ Langfuse :3000
+                          │
+                          └─ ZDR transform: prompt and completion bodies dropped
+                             token/cost attributes preserved
 ```
 
----
+`otel/otel-collector-config.yaml` deletes `gen_ai.prompt`, `gen_ai.completion`,
+`llm.prompts`, `llm.completions`, `input.value` and `output.value` before
+anything leaves the collector, and does **not** touch agentgateway's token or
+cost attributes — so you keep per-session accounting without retaining prompt
+content.
 
-## 2. Interchangeable Observability Backends
+> ⚠️ **Langfuse accepts OTLP over HTTP only.** It has no gRPC endpoint. The
+> exporter must be `otlphttp/langfuse`; an `otlp/` exporter connects and then
+> silently drops every trace. This is configured correctly already, but it is
+> the first thing to check if the Langfuse UI stays empty.
 
-Observability sinks can be swapped seamlessly by modifying the `exporters` array in `service.pipelines.traces`:
+## Setup
 
-- **AgentOps.ai**: Switch to `exporters: [otlp/agentops, logging]`.
-- **Langfuse OSS / Cloud**: Switch to `exporters: [otlp/langfuse, logging]`.
-- **Custom Internal Sinks**: Add any OTLP/HTTP or OTLP/gRPC exporter.
+```bash
+# 1. Create a project in the Langfuse UI (http://localhost:3000)
+# 2. Take its public and secret keys:
+echo "LANGFUSE_BASIC_AUTH=$(printf 'pk-lf-...:sk-lf-...' | base64 -w0)" >> .env
+docker compose restart otel-collector
+```
 
-No application code changes or agent rebuilds are needed.
+Langfuse groups traces by session id, giving tokens and cost per session and per
+agent.
+
+## Using AgentOps instead
+
+The collector is the seam, so swapping the backend is a config edit with no
+agent changes: add an `otlp/agentops` exporter alongside, and put it in the
+`traces` pipeline's `exporters` list. Everything upstream — including the ZDR
+transform — is unchanged.
+
+## What is not wired
+
+- **No Prometheus/Grafana in this stack.** agentgateway exposes the token-usage
+  metric, but nothing scrapes it. Add a Prometheus service and point it at the
+  gateway's metrics endpoint if you want dashboards and alerting on spend.
+- **Agent Control has its own audit log** of policy triggers, separate from
+  Langfuse. There is no single pane joining the two today.
+- **None of this has been observed running** — the collector config and exporter
+  choice are verified by reading, not by a trace arriving. See
+  [`current-state.md`](current-state.md).

@@ -1,0 +1,26 @@
+{
+  "name": "block-prompt-injection",
+  "description": "Catch instruction-override attempts before they reach the model. Runs pre-stage on LLM steps.",
+  "enabled": true,
+  "execution": "server",
+  "scope": {
+    "step_types": ["llm"],
+    "stages": ["pre"]
+  },
+  "condition": {
+    "selector": { "path": "input" },
+    "evaluator": {
+      "name": "regex",
+      "config": {
+        "pattern": "(?i)(ignore (all |your )?(previous|prior|above) instructions|disregard (the )?(system|previous)|you are now|reveal your (system )?prompt|print your instructions)"
+      }
+    }
+  },
+  "action": {
+    "decision": "deny",
+    "metadata": {
+      "reason": "Potential prompt injection detected",
+      "note": "Regex is a cheap first pass. For semantic detection add a galileo.luna2 control with metric prompt_injection alongside this one — controls compose, and deny wins."
+    }
+  }
+}

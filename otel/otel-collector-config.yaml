@@ -23,27 +23,32 @@ processors:
           - delete_key(attributes, "llm.completions")
           - delete_key(attributes, "input.value")
           - delete_key(attributes, "output.value")
-          # Retain execution metadata
+          # agentgateway's token-usage and cost attributes are NOT touched, so
+          # per-session accounting survives redaction — you keep the numbers
+          # without keeping the prompts.
           - set(attributes["privacy.sanitized"], "true")
-          - set(attributes["platform.version"], "v1.0.0")
+          - set(attributes["platform.version"], "v2.0.0")
 
 exporters:
-  otlp/agentops:
-    endpoint: "https://api.agentops.ai:443"
+  # Langfuse accepts OTLP over HTTP ONLY — it has no gRPC endpoint, so an
+  # `otlp/` (gRPC) exporter here would silently drop every trace.
+  # LANGFUSE_BASIC_AUTH is base64("public_key:secret_key") from a Langfuse
+  # project; without it Langfuse rejects the batch.
+  otlphttp/langfuse:
+    endpoint: "${env:LANGFUSE_OTLP_ENDPOINT}"
     headers:
-      X-Agentops-Api-Key: "${env:AGENTOPS_API_KEY}"
+      Authorization: "Basic ${env:LANGFUSE_BASIC_AUTH}"
 
-  otlp/langfuse:
-    endpoint: "https://langfuse.internal.net:443"
-    headers:
-      Authorization: "Basic ${env:LANGFUSE_AUTH_TOKEN}"
-
-  logging:
-    verbosity: detailed
+  debug:
+    verbosity: normal
 
 service:
   pipelines:
     traces:
       receivers: [otlp]
       processors: [batch, transform]
-      exporters: [otlp/agentops, logging]
+      # `debug` sits alongside Langfuse so traces stay visible in
+      # `docker compose logs otel-collector` before a Langfuse project exists.
+      # AgentOps is the alternative sink: add an `otlp/agentops` exporter and
+      # swap it in here — the collector is the seam, so no agent changes.
+      exporters: [otlphttp/langfuse, debug]

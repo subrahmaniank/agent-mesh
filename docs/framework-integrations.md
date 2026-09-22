@@ -1,90 +1,88 @@
-# Framework Integrations (CrewAI, LangGraph, AutoGen)
+# Framework integrations
 
-The platform enables running agents built in any framework (CrewAI, LangGraph, AutoGen, or custom REST microservices) while enforcing centralized policy and privacy guardrails.
-
----
-
-## 1. CrewAI Integration Example
-
-To build a standalone CrewAI project that connects to the platform:
-
-### 1.1 Secure Tool Wrapper (`gateway_tool.py`)
-
-```python
-import os
-import httpx
-from crewai.tools import BaseTool
-from pydantic import Field
-
-GATEWAY_URL = os.getenv("GATEWAY_URL", "http://localhost:8080")
-
-class PlatformSecureTool(BaseTool):
-    name: str = "platform_secure_tool"
-    description: str = "Executes operations governed by Cedar RBAC and Presidio DLP."
-    
-    agent_id: str = Field(default_factory=lambda: os.getenv("AGENT_ID", "crew-researcher-01"))
-    tenant_id: str = Field(default_factory=lambda: os.getenv("TENANT_ID", "tenant-alpha"))
-
-    def _run(self, tool_name: str, payload: dict) -> str:
-        with httpx.Client(timeout=30.0) as client:
-            response = client.post(
-                f"{GATEWAY_URL}/v1/tools/call",
-                json={
-                    "agent_id": self.agent_id,
-                    "tenant_id": self.tenant_id,
-                    "tool": tool_name,
-                    "arguments": payload,
-                    "context": {
-                        "user_id": os.getenv("USER_ID", "user-01"),
-                        "user_clearance": int(os.getenv("USER_CLEARANCE", "3")),
-                        "hitl_approved": False,
-                        "payload": str(payload)
-                    }
-                }
-            )
-            response.raise_for_status()
-            return str(response.json())
-```
-
-### 1.2 Agent Definition (`main.py`)
-
-```python
-from crewai import Agent, Task, Crew
-from gateway_tool import PlatformSecureTool
-
-secure_tool = PlatformSecureTool()
-
-researcher = Agent(
-    role="Security Analyst",
-    goal="Safely query customer metadata.",
-    backstory="Enterprise agent subject to Cedar policy constraints.",
-    tools=[secure_tool]
-)
-
-task = Task(
-    description="Query user logs with payload {'query': 'SELECT * FROM logs LIMIT 5'}",
-    expected_output="Sanitized summary of query results.",
-    agent=researcher
-)
-
-crew = Crew(agents=[researcher], tasks=[task])
-result = crew.kickoff()
-print(result)
-```
+Any framework works, because the integration point is an ordinary
+OpenAI-compatible HTTP endpoint. There is no platform SDK to adopt.
 
 ---
 
-## 2. Universal Agent Shim (`remote_runner/runner_shim.py`)
+## The general shape
 
-For LangGraph or AutoGen agents, use `UniversalAgentShim`:
+Point the framework's LLM client at the gateway and give it the agent's bearer
+token:
+
+```
+base_url = http://localhost:4000/v1
+api_key  = $GATEWAY_TOKEN
+```
+
+That is the whole integration. Authentication, Cedar authorization, PII
+guardrails, provider routing and token/cost telemetry all happen behind it.
+
+## LangChain / LangGraph
 
 ```python
-from remote_runner.runner_shim import UniversalAgentShim
+from langchain_openai import ChatOpenAI
 
-shim = UniversalAgentShim(agent_id="langgraph-agent-01", tenant_id="tenant-alpha")
-result = await shim.execute_step(
-    tool_name="database_read",
-    payload={"query": "SELECT count(*) FROM transactions"},
-    user_context={"user_id": "u-100", "user_clearance": 4}
+llm = ChatOpenAI(
+    base_url="http://localhost:4000/v1",
+    api_key=os.environ["GATEWAY_TOKEN"],
+    model="llama3",          # a model name from agentgateway/config.yaml
 )
 ```
+
+## CrewAI
+
+```python
+from crewai import Agent, LLM
+
+llm = LLM(
+    model="openai/llama3",   # CrewAI routes OpenAI-compatible via this prefix
+    base_url="http://localhost:4000/v1",
+    api_key=os.environ["GATEWAY_TOKEN"],
+)
+researcher = Agent(role="Researcher", goal="...", llm=llm)
+```
+
+## AutoGen
+
+```python
+config_list = [{
+    "model": "llama3",
+    "base_url": "http://localhost:4000/v1",
+    "api_key": os.environ["GATEWAY_TOKEN"],
+}]
+```
+
+## Anything else
+
+Direct HTTP works identically — see
+[`agent-onboarding-guide.md`](agent-onboarding-guide.md#calling-through-the-gateway).
+
+---
+
+## Switching providers
+
+`model` names an entry in `agentgateway/config.yaml`, not a provider. Moving an
+agent from a local model to a hosted one — or between clouds — is a change to
+that file, or to which model name the agent asks for. The framework code above
+does not change, and the governance travels with it: guardrails, Cedar
+authorization and telemetry apply to every backend.
+
+Whether an agent *may* use a given model is a Cedar decision, not a
+configuration detail — an agent granted only the `local` tier is denied hosted
+providers no matter what it passes as `model`.
+
+## Step-level governance
+
+Framework integration covers the wire. To govern the agent's internal steps,
+add Agent Control's decorator to the functions you want checked — see
+[`agent-onboarding-guide.md`](agent-onboarding-guide.md#adding-step-level-controls).
+Agent Control ships integrations for LangChain, LangGraph, CrewAI, Google ADK
+and AWS Strands.
+
+## MCP tools
+
+Tools reach agents through agentgateway's MCP gateway rather than being wired
+into each framework separately, so the same authorization and guardrails apply.
+Register the server in agentregistry, add it to `mcp.targets`, and give it a
+Cedar `Tool` entity.

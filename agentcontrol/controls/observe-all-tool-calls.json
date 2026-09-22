@@ -1,0 +1,23 @@
+{
+  "name": "observe-all-tool-calls",
+  "description": "Non-blocking audit of every tool invocation. Answers 'what are the agents actually doing' at step granularity, complementing the registry's answer to 'what is approved'.",
+  "enabled": true,
+  "execution": "server",
+  "scope": {
+    "step_types": ["tool"],
+    "stages": ["pre"]
+  },
+  "condition": {
+    "selector": { "path": "*" },
+    "evaluator": {
+      "name": "regex",
+      "config": { "pattern": ".*" }
+    }
+  },
+  "action": {
+    "decision": "observe",
+    "metadata": {
+      "reason": "Audit trail for tool usage"
+    }
+  }
+}

@@ -1,0 +1,2 @@
+# Only needed for the Temporal approval lookup. Everything else is stdlib.
+temporalio>=1.5.1
