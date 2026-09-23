@@ -81,20 +81,20 @@ blank page at these URLs is expected rather than a fault.
 | Agent Control | http://localhost:4001 | Controls dashboard (API `:8000`) |
 | Langfuse | http://localhost:3300 | Traces, tokens, cost — `LANGFUSE_PORT` |
 
-> **The fetch goes through the GitHub contents API**, not
-> `raw.githubusercontent.com`, because TLS-inspecting proxies routinely block
-> the raw host while allowing `api.github.com`. If your network blocks both,
-> download the files by hand into
-> `.vendor/{agentregistry,agentcontrol,langfuse}.yml`, or point the script
-> elsewhere with `AGENTREGISTRY_COMPOSE_URL`, `AGENTCONTROL_COMPOSE_URL`,
-> `LANGFUSE_COMPOSE_URL`.
+> **No network needed.** The compose files are committed under `vendor/`, pinned
+> to specific upstream commits recorded in
+> [`vendor/VENDORED.md`](../vendor/VENDORED.md). `up` reads them straight from
+> the repository, so a fresh clone brings up exactly what you were running.
+> Only `refresh` talks to GitHub — it re-pins to the latest commit and prints
+> the diff for you to review and commit.
 >
-> **agentregistry additionally needs a `VERSION`** release tag, which nothing
-> here supplies yet — it will fail to start while the other two come up.
+> **Langfuse is remapped to 3300** because 3000 is so often taken. That, and the
+> other local changes, live in `vendor/langfuse.override.yml` — ours,
+> hand-written and tracked, layered over the untouched upstream file. Change
+> `LANGFUSE_PORT` in `.env` to move it.
 >
-> **Langfuse is remapped to 3300** because 3000 is so often taken. The script
-> writes `.vendor/langfuse.override.yml` to do it, so re-fetching the vendor
-> compose cannot revert it. Change `LANGFUSE_PORT` in `.env` to move it.
+> **agentregistry needs a `VERSION`** release tag, which nothing here supplies
+> yet, so it fails to start while the others come up.
 
 > **Ports.** Every published port is overridable in `.env` — `GATEWAY_PORT`,
 > `OTEL_GRPC_PORT` and friends. 4000, 4317/4318 and 3000 are claimed by a lot of
@@ -302,11 +302,16 @@ self-contained.
 
 ## Still to exercise
 
-The three vendor stacks have not been started here:
-`python3 scripts/vendor_stacks.py up` brings up agentregistry, Agent Control and
-Langfuse. Until then the registry → Cedar identity hand-off and the per-session
-token/cost view are configured but unproven. `mcp.targets` is also empty, so
-the tool path has been verified through Cedar but not against a real MCP server.
+**Langfuse runs** on http://localhost:3300, with traces arriving and verified to
+carry no prompt content.
+
+Two vendor stacks are vendored and pinned but not started: **agentregistry**,
+which needs a `VERSION` release tag nothing here supplies, and **Agent Control**.
+Until agentregistry runs, the registry → Cedar identity hand-off is unproven and
+`registry_status` is set by hand in `cedar/entities.json`.
+
+`mcp.targets` is also empty, so the tool path has been verified through Cedar but
+not against a real MCP server.
 
 ## Teardown
 

@@ -175,13 +175,12 @@ building — see [`certs/README.md`](certs/README.md).
 | Temporal | http://localhost:8233 | **up** with `docker compose up -d` |
 | agentregistry | http://localhost:12121 | needs `python3 scripts/vendor_stacks.py up` |
 | Agent Control | http://localhost:4001 | needs `python3 scripts/vendor_stacks.py up` |
-| Langfuse | http://localhost:3300 | needs `python3 scripts/vendor_stacks.py up` (3000 is usually taken, hence 3300) |
+| Langfuse | http://localhost:3300 | **up** via `python3 scripts/vendor_stacks.py up` (3000 is usually taken, hence 3300) |
 
 The last three publish their own compose files and are **not** started by
-`docker compose up -d`. On a network with TLS inspection the fetch may be
-blocked outright — it returns a proxy block page rather than the file — in which
-case download each project's compose file by hand into `.vendor/`. See
-[`docs/getting-started.md`](docs/getting-started.md).
+`docker compose up -d`. Those files are committed under `vendor/`, pinned to
+specific upstream commits, so bringing them up needs no network — see
+[`vendor/VENDORED.md`](vendor/VENDORED.md).
 
 Full walkthrough: [`docs/getting-started.md`](docs/getting-started.md).
 
@@ -218,14 +217,17 @@ presidio-adapter/            guardrail webhook → Presidio         [code]
 orchestrator/                Temporal workflows and activities    [code]
 agentcontrol/controls/       step-level controls (JSON)
 registry/                    how agents get published and approved
-otel/                        ZDR transform + Langfuse exporter
+otel/                        telemetry allow-list + Langfuse exporter
+vendor/                      upstream compose files, pinned — see VENDORED.md
 certs/                       corporate root CAs for TLS-inspecting proxies
 auth/                        dev JWT signing key + JWKS (gitignored)
-scripts/                     cedar loader, token issuer, vendor stack launcher
+scripts/                     cedar loader, token issuer, vendor stacks (Python)
 tests/                       cedar policies, adapters, Temporal workflows
 ```
 
-Three things are code; everything else is configuration.
+Three things are code — `cedar-shim/`, `presidio-adapter/`, `orchestrator/` —
+and everything else is configuration. The scripts are Python so they run on any
+OS; `vendor/` is committed so the stack is reproducible without network access.
 
 ## What is verified
 
@@ -273,11 +275,13 @@ docker run --rm -v ./agentgateway:/c:ro cr.agentgateway.dev/agentgateway:v1.5.0 
 | `tests/adapters/test_presidio_adapter.py` (11) | The agentgateway webhook contract, NER-only entities caught where regex would miss, and **fail-closed when Presidio is down** |
 | `tests/workflows/` (8) | Temporal saga: LIFO compensation, policy denials not retried, partial-compensation recovery, approval signal, SLA timeout |
 
-Still unverified: the three vendor stacks in `scripts/vendor_stacks.py`
-(agentregistry, Agent Control, Langfuse) have not been started, so the registry
-→ Cedar identity hand-off and the Langfuse token/cost view are configured but
-unexercised. MCP targets are empty, so the tool path has been proven only
-through Cedar, not through a real MCP server.
+Still unverified: **agentregistry** and **Agent Control** are vendored and
+pinned but not started — agentregistry needs a `VERSION` release tag nothing
+here supplies — so the registry → Cedar identity hand-off is unexercised and
+`registry_status` is set by hand. MCP targets are empty, so the tool path has
+been proven through Cedar but not against a real MCP server. Windows is
+untested: the tooling is OS-independent by construction (Python plus Docker),
+but this was developed on Linux.
 
 ## Documentation
 

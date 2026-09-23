@@ -74,7 +74,7 @@ agentgateway
   5. GUARDRAILS  the same two checks over the response
   6. TELEMETRY   OTel span: tokens, model, session; log: realized cost
   ▼
-OTel Collector ──(ZDR transform drops prompt bodies)──▶ Langfuse
+OTel Collector ──(allow-list: only named attributes survive)──▶ Langfuse
   ▼
 Langfuse — trace grouped by session, with tokens and cost
 ```
@@ -139,13 +139,21 @@ would be permitted — which is what `tests/adapters/test_cedar_shim.py` guards.
 
 ## Fail-closed behaviour
 
-| Dependency down | Result |
-|---|---|
-| cedar-agent unreachable | shim returns 403 — denied |
-| Presidio unreachable | adapter returns Reject — denied |
-| Agent Control unreachable | engine default is `deny` |
-| Cedar policy set empty (failed load) | Cedar is deny-by-default — everything denied |
-| Langfuse unreachable | traces lost; traffic unaffected (observability is not in the path) |
+Measured by stopping each container and issuing a request, not inferred:
 
-The only component whose failure does not block traffic is the one that must
-not: observability.
+| Dependency down | Observed |
+|---|---|
+| `cedar-agent` | `403 external authorization failed` |
+| `cedar-shim` | `403 external authorization failed` |
+| `presidio-analyzer` or `-adapter` | `503 … prompt guard failed` |
+| Cedar policy set empty (failed load, or a cedar-agent restart) | `403 cedar:deny []` — deny-by-default |
+| Agent Control unreachable | engine default is `deny` (not measured; not running here) |
+| `otel-collector` | **`200`** — traffic unaffected, telemetry silently lost |
+| Langfuse | **`200`** — collector logs an export failure per batch |
+| `temporal`, `orchestrator`, `remote-runner` | **`200`** — workflows stall, LLM calls unaffected |
+
+The only components whose failure does not block traffic are the ones that must
+not: observability and orchestration. Everything on the authorization and PII
+path fails closed.
+
+Per-container detail is in [The containers](containers.md).

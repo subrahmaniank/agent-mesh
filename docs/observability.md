@@ -199,7 +199,7 @@ docker exec agentmesh_gateway_postgres \
   psql -U agentgateway -d agentgateway -c 'select count(*) from request_log_payloads;'
 ```
 
-This matters. The collector's ZDR transform protects *traces*; it has no effect
+This matters. The collector's allow-list protects *traces*; it has no effect
 on the request log, which is a separate path to a separate store. If payload
 capture is ever switched on, that database holds prompt content and must be
 treated accordingly.
@@ -245,8 +245,8 @@ Six containers: `langfuse-web`, `langfuse-worker`, `clickhouse`, `redis`,
 
 | | |
 |---|---|
-| **Fetching the compose file** | `raw.githubusercontent.com` is blocked by TLS-inspecting proxies. The script uses the GitHub **contents API** instead — `api.github.com` is reachable where the raw host is not |
-| **Port 3000** | claimed by Grafana and much else. Remapped to `LANGFUSE_PORT` (3300) through `.vendor/langfuse.override.yml`, which the script regenerates — so re-fetching the vendor file cannot silently revert it |
+| **Fetching the compose file** | `raw.githubusercontent.com` is blocked by TLS-inspecting proxies, so `refresh` uses the GitHub **contents API** — `api.github.com` is reachable where the raw host is not. The result is committed under `vendor/`, so `up` needs no network at all |
+| **Port 3000** | claimed by Grafana and much else. Remapped to `LANGFUSE_PORT` (3300) in `vendor/langfuse.override.yml` — ours, tracked, layered over the untouched upstream file |
 | **The minio image** | upstream uses `cgr.dev/chainguard/minio`, whose blobs come from `r2.cloudflarestorage.com` and 403 behind the proxy *after* the manifest has already downloaded, so it looks transient. Substituted with `quay.io/minio/minio` |
 | **Credentials** | `DATABASE_URL` is read directly and defaults to the stock `postgres:postgres`. Setting `POSTGRES_PASSWORD` alone gives Prisma `P1001: Can't reach database server`, which reads as a network fault and is actually auth |
 
@@ -278,7 +278,7 @@ land.
 
 The collector is the seam, so swapping the backend is a config edit with no agent
 changes: add an `otlp/agentops` exporter and put it in the `traces` pipeline's
-`exporters` list. Everything upstream — including the ZDR transform — is
+`exporters` list. Everything upstream — including the allow-list — is
 unchanged.
 
 ## What is not wired
