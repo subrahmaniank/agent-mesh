@@ -339,8 +339,12 @@ test failing tells you a boundary you believed in does not exist.
 ## Step 8 — Issue the credential
 
 ```bash
-TOKEN=$(python3 scripts/agent_token.py issue $AGENT --ttl 604800)
-echo $TOKEN
+python3 scripts/agent_token.py issue $AGENT --ttl 604800
+
+# or write it straight into .env as GATEWAY_TOKEN, which avoids shell
+# substitution entirely — the one step that differs between POSIX shells
+# and PowerShell:
+python3 scripts/agent_token.py issue $AGENT --ttl 604800 --write-env
 ```
 
 | TTL | Use for |

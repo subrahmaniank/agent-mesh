@@ -7,9 +7,15 @@ own Ollama, wherever it runs. Cloud providers are additive.
 
 ## 1. Prerequisites
 
+Works the same on Windows, macOS and Linux — no bash, no WSL, no `openssl`
+binary, no GNU coreutils.
+
 - Docker and Docker Compose
-- Python 3.12 (the Cedar loader and token issuer are stdlib-only scripts)
-- `openssl` (signs development JWTs)
+- Python 3.12
+- `python3 -m pip install -r scripts/requirements.txt` — one package,
+  `cryptography`, for signing development JWTs. Prebuilt wheels exist for all
+  three platforms, so no compiler is needed. (If you already have the `openssl`
+  binary, the token script falls back to it and you can skip this.)
 - [uv](https://docs.astral.sh/uv/), for the test suite only
 
 **Behind a TLS-inspecting proxy** (Zscaler, Netskope, Palo Alto): copy your
@@ -39,7 +45,7 @@ takes a base URL, not a `host:port` pair:
 
 ```bash
 docker compose up -d            # components configured in this repo
-./scripts/up-vendor-stacks.sh   # products with their own compose files
+python3 scripts/vendor_stacks.py up   # products with their own compose files
 ```
 
 If you'd rather run Ollama here than point at an existing one:
@@ -63,7 +69,7 @@ The admin UI's **Analytics** tab is backed by `agentgateway-postgres`, which
 starts with the rest of the stack — see
 [Observability](observability.md#the-request-log-and-the-analytics-tab).
 
-### Started by `./scripts/up-vendor-stacks.sh`
+### Started by `python3 scripts/vendor_stacks.py up`
 
 These three publish their own compose files and are deliberately not copied into
 `docker-compose.yml`. **They are not running unless you run that script**, so a
@@ -94,7 +100,8 @@ blank page at these URLs is expected rather than a fault.
 > `OTEL_GRPC_PORT` and friends. 4000, 4317/4318 and 3000 are claimed by a lot of
 > other local stacks; when one clashes you get
 > `Bind for 0.0.0.0:4317 failed: port is already allocated`. Find the holder
-> with `ss -lntp | grep :4317`.
+> with `docker ps --format '{{.Names}}\t{{.Ports}}'` (any OS), or `ss -lntp`
+> on Linux.
 >
 > The commands below use `$GATEWAY` so they work whatever you set:
 >
@@ -199,7 +206,9 @@ apply to the new backend automatically.
 Create a project in the Langfuse UI, then:
 
 ```bash
-echo "LANGFUSE_BASIC_AUTH=$(printf 'pk-lf-...:sk-lf-...' | base64 -w0)" >> .env
+# Nothing to do: vendor_stacks.py provisions the project and writes
+# LANGFUSE_BASIC_AUTH into .env for you. base64 by hand is not needed --
+# `base64 -w0` is GNU-only and fails on macOS and Windows anyway.
 docker compose restart otel-collector
 ```
 
@@ -234,7 +243,7 @@ uv run pytest tests/ -q          # 52 passing, no Docker needed
 | `http://localhost:15000` hangs or returns nothing | the admin UI binds `127.0.0.1` inside the container by default, so the published port maps to nothing | `config.adminAddr: "0.0.0.0:15000"` in `agentgateway/config.yaml` — already set |
 | `Analytics API error: request log database is not configured` | `config.database` unset, or `agentgateway-postgres` not healthy | `docker compose ps agentgateway-postgres`; the gateway creates its own schema on connect |
 | Traces configured but nothing reaches the collector | `config.tracing.randomSampling` defaults to `null`, which samples nothing | set it to `true` |
-| agentregistry / Agent Control / Langfuse blank | they are not started by `docker compose up -d` | `./scripts/up-vendor-stacks.sh`, and see the note about blocked downloads above |
+| agentregistry / Agent Control / Langfuse blank | they are not started by `docker compose up -d` | `python3 scripts/vendor_stacks.py up`, and see the note about blocked downloads above |
 | otel-collector won't start on an unset variable | older collectors can't expand `${env:VAR:-default}` | already fixed by pinning 0.119.0 |
 
 ## Verifying the security model
@@ -294,7 +303,7 @@ self-contained.
 ## Still to exercise
 
 The three vendor stacks have not been started here:
-`./scripts/up-vendor-stacks.sh` brings up agentregistry, Agent Control and
+`python3 scripts/vendor_stacks.py up` brings up agentregistry, Agent Control and
 Langfuse. Until then the registry → Cedar identity hand-off and the per-session
 token/cost view are configured but unproven. `mcp.targets` is also empty, so
 the tool path has been verified through Cedar but not against a real MCP server.
@@ -303,5 +312,5 @@ the tool path has been verified through Cedar but not against a real MCP server.
 
 ```bash
 docker compose down
-./scripts/up-vendor-stacks.sh down
+python3 scripts/vendor_stacks.py down
 ```

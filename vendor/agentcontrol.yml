@@ -1,0 +1,65 @@
+# Agent Control Server - Docker Compose Configuration
+#
+# Quick Start:
+#   docker compose up -d
+#   AGENT_CONTROL_SERVER_HOST_PORT=18000 AGENT_CONTROL_DB_HOST_PORT=15432 docker compose up -d
+#   AGENT_CONTROL_POSTGRES_PASSWORD=agent_control_local docker compose up -d
+#
+# Services:
+#   - PostgreSQL database (port 5432)
+#   - Agent Control Server API (port 8000)
+#   - Agent Control UI Dashboard (port 4000)
+#
+# The images are published to Docker Hub at:
+#   galileoai/agent-control-server:latest
+#   galileoai/agent-control-ui:latest
+#
+# This compose file pulls prebuilt images for both server and UI from Docker Hub.
+# For local development (run server with uvicorn or build UI locally), use:
+#   docker compose -f docker-compose.dev.yml up -d
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: agent_control_postgres
+    ports:
+      - "${AGENT_CONTROL_DB_HOST_PORT:-5432}:5432"
+    environment:
+      POSTGRES_DB: agent_control
+      POSTGRES_USER: agent_control
+      POSTGRES_PASSWORD: "${AGENT_CONTROL_POSTGRES_PASSWORD:-agent_control}"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U agent_control -d agent_control"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  server:
+    platform: linux/amd64
+    image: galileoai/agent-control-server:latest
+    container_name: agent_control_server
+    ports:
+      - "${AGENT_CONTROL_SERVER_HOST_PORT:-8000}:8000"
+    environment:
+      # Database connection uses the Docker service name and the container port.
+      # AGENT_CONTROL_DB_HOST_PORT only controls the host-side port mapping.
+      AGENT_CONTROL_DB_URL: "postgresql+psycopg://agent_control:${AGENT_CONTROL_POSTGRES_PASSWORD:-agent_control}@postgres:5432/agent_control"
+      # Server configuration
+      AGENT_CONTROL_HOST: 0.0.0.0
+      AGENT_CONTROL_PORT: 8000
+      # API authentication (override via host env or server/.env; see server/.env.example)
+      AGENT_CONTROL_API_KEY_ENABLED: ${AGENT_CONTROL_API_KEY_ENABLED:-false}
+      AGENT_CONTROL_API_KEYS: ${AGENT_CONTROL_API_KEYS:-}
+      AGENT_CONTROL_ADMIN_API_KEYS: ${AGENT_CONTROL_ADMIN_API_KEYS:-}
+      AGENT_CONTROL_SESSION_SECRET: ${AGENT_CONTROL_SESSION_SECRET:-}
+      AGENT_CONTROL_CORS_ORIGINS: ${AGENT_CONTROL_CORS_ORIGINS:-http://localhost:4000}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  pgdata:

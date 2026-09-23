@@ -233,7 +233,7 @@ from request_logs group by 1, 2;
 ## Running Langfuse
 
 ```bash
-./scripts/up-vendor-stacks.sh          # not part of `docker compose up -d`
+python3 scripts/vendor_stacks.py up          # not part of `docker compose up -d`
 docker compose restart otel-collector  # pick up LANGFUSE_BASIC_AUTH
 ```
 

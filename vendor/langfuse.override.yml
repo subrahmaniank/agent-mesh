@@ -1,0 +1,55 @@
+# Our changes to Langfuse's upstream compose file. THIS FILE IS OURS — it is
+# hand-written and reviewed. vendor/langfuse.yml beside it is upstream's and is
+# pinned; do not edit that one.
+#
+# Compose merges by default, which is wrong for most of what is here: a plain
+# `ports:` key APPENDS to upstream's list, so the container would still try to
+# bind the port we are moving away from. `!override` replaces a list, `!reset`
+# clears one.
+
+services:
+  langfuse-web:
+    # Upstream publishes 3000, which Grafana, dev servers, Next.js and plenty
+    # else routinely own. LANGFUSE_PORT moves it without touching upstream.
+    ports: !override
+      - "${LANGFUSE_PORT:-3300}:3000"
+
+    # Headless initialization: creates the organisation, project, user and API
+    # keys on first boot, so LANGFUSE_BASIC_AUTH in .env is valid immediately
+    # and the OTel collector can authenticate without anyone clicking through
+    # the UI to mint keys. Ignored once those objects exist.
+    environment:
+      LANGFUSE_INIT_ORG_ID: ${LANGFUSE_INIT_ORG_ID:-agentmesh}
+      LANGFUSE_INIT_ORG_NAME: ${LANGFUSE_INIT_ORG_NAME:-AgentMesh}
+      LANGFUSE_INIT_PROJECT_ID: ${LANGFUSE_INIT_PROJECT_ID:-agentmesh}
+      LANGFUSE_INIT_PROJECT_NAME: ${LANGFUSE_INIT_PROJECT_NAME:-AgentMesh}
+      LANGFUSE_INIT_PROJECT_PUBLIC_KEY: ${LANGFUSE_INIT_PROJECT_PUBLIC_KEY:-}
+      LANGFUSE_INIT_PROJECT_SECRET_KEY: ${LANGFUSE_INIT_PROJECT_SECRET_KEY:-}
+      LANGFUSE_INIT_USER_EMAIL: ${LANGFUSE_INIT_USER_EMAIL:-}
+      LANGFUSE_INIT_USER_NAME: ${LANGFUSE_INIT_USER_NAME:-AgentMesh Admin}
+      LANGFUSE_INIT_USER_PASSWORD: ${LANGFUSE_INIT_USER_PASSWORD:-}
+
+  # Upstream uses cgr.dev/chainguard/minio, whose blobs are served from
+  # r2.cloudflarestorage.com. A TLS-inspecting proxy can 403 those blobs *after*
+  # the manifest has already downloaded, so the pull fails halfway and reads as
+  # a transient network glitch rather than a policy block:
+  #
+  #   failed to copy: httpReadSeeker: failed open: ... 403 Forbidden
+  #
+  # quay.io/minio/minio is upstream MinIO and pulls cleanly. entrypoint and
+  # command are restated because replacing the image does not carry them over,
+  # and the bucket has to exist before the server starts.
+  minio:
+    image: ${LANGFUSE_MINIO_IMAGE:-quay.io/minio/minio:latest}
+    entrypoint: sh
+    command: -c 'mkdir -p /data/langfuse && minio server --address ":9000" --console-address ":9001" /data'
+
+  # Langfuse's own datastores publish host ports that other stacks commonly
+  # hold — 5432 above all. Nothing outside Langfuse's network needs them:
+  # langfuse-web and langfuse-worker reach them by service name.
+  postgres:
+    ports: !reset []
+  clickhouse:
+    ports: !reset []
+  redis:
+    ports: !reset []

@@ -1,0 +1,9 @@
+# The only dependency the helper scripts need.
+#
+# Ed25519 signing, replacing shell-outs to the `openssl` binary — which is not
+# present by default on Windows and made the scripts OS-dependent for no gain.
+# Ships prebuilt wheels for Windows, macOS (x86_64 and arm64) and manylinux, so
+# no compiler or toolchain is required.
+#
+#   python3 -m pip install -r scripts/requirements.txt
+cryptography>=42.0

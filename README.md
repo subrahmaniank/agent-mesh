@@ -56,6 +56,32 @@ call type.
 | Observability | [Langfuse](https://langfuse.com) | Traces, tokens, cost per session |
 | Orchestration | [Temporal](https://temporal.io) | Durable workflows, sagas, approval gates |
 
+## The containers
+
+21 containers once everything is up. Full detail, including what each one's
+failure actually does, is in [`docs/containers.md`](docs/containers.md).
+
+| Container | Does | If it stops |
+|---|---|---|
+| `agentgateway` | every LLM/MCP/tool call: authn, authz, guardrails, routing, telemetry | everything |
+| `ollama` *(profile)* | optional in-stack inference | `503` — authz already passed |
+| `cedar-agent` | the Cedar PDP | `403` — **and a restart empties its policy store** |
+| `cedar-shim` | turns a Cedar decision into 200/403 for extAuthz | `403`, fail closed |
+| `cedar-loader` | one-shot: loads policies and entities, then exits 0 | nothing — but re-run it after editing `cedar/` |
+| `presidio-analyzer` | NER detection | `503`, fail closed |
+| `presidio-anonymizer` | masking | `200` — not in the default path |
+| `presidio-adapter` | bridges the guardrail webhook to Presidio | `503`, fail closed |
+| `otel-collector` | scrubs telemetry, forwards to Langfuse | `200` — **traffic fine, telemetry silently lost** |
+| `agentgateway-postgres` | request log behind the Analytics tab | `200` running; blocks a cold start |
+| `temporal` + `-postgres` + `-ui` | durable workflows, their store and browser | `200` — workflows stall |
+| `orchestrator` | control-plane Temporal worker | `200` |
+| `remote-runner` | agent-plane worker; outbound only, no inbound ports | `200` |
+| Langfuse ×6 | traces, tokens and cost — started separately | `200`, export failures logged |
+
+Every `200` is a design property, not an oversight: those containers are not in
+the request path. Every value in that column was measured by stopping the
+container and issuing a request, not inferred.
+
 ## Any LLM backend, by configuration
 
 Clients always speak one OpenAI-compatible API to `:4000`. Which backend serves
@@ -122,7 +148,7 @@ cp .env.example .env
 python3 scripts/agent_token.py init   # one-time: dev signing key + JWKS
 
 docker compose up -d          # gateway, cedar, presidio, temporal, otel
-./scripts/up-vendor-stacks.sh # agentregistry, Agent Control, Langfuse
+python3 scripts/vendor_stacks.py up   # Langfuse, Agent Control, agentregistry
 
 # No Ollama of your own? Run one in-compose instead:
 #   docker compose --profile local-llm up -d
@@ -147,9 +173,9 @@ building — see [`certs/README.md`](certs/README.md).
 |---|---|---|
 | agentgateway admin | http://localhost:15000 | **up** with `docker compose up -d` |
 | Temporal | http://localhost:8233 | **up** with `docker compose up -d` |
-| agentregistry | http://localhost:12121 | needs `./scripts/up-vendor-stacks.sh` |
-| Agent Control | http://localhost:4001 | needs `./scripts/up-vendor-stacks.sh` |
-| Langfuse | http://localhost:3300 | needs `./scripts/up-vendor-stacks.sh` (3000 is usually taken, hence 3300) |
+| agentregistry | http://localhost:12121 | needs `python3 scripts/vendor_stacks.py up` |
+| Agent Control | http://localhost:4001 | needs `python3 scripts/vendor_stacks.py up` |
+| Langfuse | http://localhost:3300 | needs `python3 scripts/vendor_stacks.py up` (3000 is usually taken, hence 3300) |
 
 The last three publish their own compose files and are **not** started by
 `docker compose up -d`. On a network with TLS inspection the fetch may be
@@ -247,7 +273,7 @@ docker run --rm -v ./agentgateway:/c:ro cr.agentgateway.dev/agentgateway:v1.5.0 
 | `tests/adapters/test_presidio_adapter.py` (11) | The agentgateway webhook contract, NER-only entities caught where regex would miss, and **fail-closed when Presidio is down** |
 | `tests/workflows/` (8) | Temporal saga: LIFO compensation, policy denials not retried, partial-compensation recovery, approval signal, SLA timeout |
 
-Still unverified: the three vendor stacks in `scripts/up-vendor-stacks.sh`
+Still unverified: the three vendor stacks in `scripts/vendor_stacks.py`
 (agentregistry, Agent Control, Langfuse) have not been started, so the registry
 → Cedar identity hand-off and the Langfuse token/cost view are configured but
 unexercised. MCP targets are empty, so the tool path has been proven only
@@ -257,6 +283,7 @@ through Cedar, not through a real MCP server.
 
 | Guide | |
 |---|---|
+| [The containers](docs/containers.md) | What each of the 21 containers does, and what its failure breaks |
 | [Current state](docs/current-state.md) | What changed from the custom build, and what is not yet wired |
 | [Architecture](docs/architecture.md) | The five planes, request walkthrough, admission control |
 | [Security & governance](docs/security-and-governance.md) | Cedar IAM, the two PII layers and their limits, fail-closed behaviour |
