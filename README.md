@@ -20,24 +20,75 @@ authorizes with Cedar, screens for PII, and records tokens and cost.
 
 ## Architecture
 
-```
-  agentregistry :12121          catalogue · versions · publishers · APPROVAL
-        │ approved artifact → Cedar principal
-        ▼
-   agent ──▶ agentgateway :4000  (admin UI :15000)
-               │
-               ├─ 1. authn        JWT / API key
-               ├─ 2. authz        extAuthz ─▶ cedar-shim ─▶ cedar-agent :8180
-               ├─ 3. guardrails   regex mask  +  webhook ─▶ presidio-adapter ─▶ Presidio
-               ├─ 4. route        OpenAI · Anthropic · Azure · Bedrock · Vertex
-               │                  Gemini · Groq · Mistral · Ollama · vLLM · …
-               ├─ 5. guardrails   same checks over the response
-               └─ 6. telemetry    OTel ─▶ collector (allow-list) ─▶ Langfuse :3300
-                                  request log ─▶ postgres ─▶ Analytics tab
-                                          tokens + cost per agent
+### The planes
 
-  Agent Control :8000 (UI :4001)  step-level controls inside the agent
-  Temporal :7233 (UI :8233)       durable orchestration, sagas, HITL gates
+```
+                     ┌──────────────────────────┐
+                     │  agentregistry :12121    │
+                     │  catalogue · versions    │
+                     │  publishers · APPROVAL   │
+                     │  (not started)           │
+                     └─────────────┬────────────┘
+                                   ┆ approved artifact
+                                   ┆ ┄┄▶ Cedar principal
+                                   ▼
+┌──────────────┐        ┌──────────────────────┐        ┌───────────────────┐
+│  YOUR AGENT  │ OpenAI │  agentgateway :4000  │        │  cedar-shim       │
+│              │───────▶│  admin UI :15000     │        │  cedar-agent      │
+│ CrewAI ·     │ Bearer │                      │───────▶│  :8180            │
+│ LangGraph ·  │        │  1 authn             │allow / │  policies + data  │
+│ AutoGen ·    │        │  2 authz             │  deny  └───────────────────┘
+│ custom code  │        │  3 guardrails        │
+│              │        │  4 route             │        ┌───────────────────┐
+│ Agent Control│        │  5 guardrails        │        │  presidio-adapter │
+│ :8000, in the│◀───────│  6 telemetry         │───────▶│  presidio         │
+│ agent process│ tokens │                      │ mask / │  analyzer (NER)   │
+│ (not started)│        │                      │ reject └───────────────────┘
+└──────────────┘        └─────┬──────────────┬─┘
+                              │ 4 route      │ 6 OTLP
+                              ▼              ▼
+             ┌────────────────────┐  ┌──────────────────────┐
+             │  LLM backends      │  │  otel-collector      │
+             │  Ollama · OpenAI · │  │  allow-list scrub    │
+             │  Azure · Bedrock · │  └───────┬──────────────┘
+             │  Vertex · …        │          │
+             │                    │          ▼
+             │  MCP targets       │  ┌──────────────────────┐
+             └────────────────────┘  │  Langfuse :3300      │
+                                     │  traces · tokens ·   │
+                                     │  cost per session    │
+                                     └──────────────────────┘
+
+  Temporal :7233 (UI :8233) ──▶ orchestrator · remote-runner
+  durable workflows, sagas, HITL gates — beside the request path
+```
+
+### One call, end to end
+
+```
+  agent
+    │  POST :4000/v1/chat/completions  ·  Bearer <token>
+    ▼
+┌─────────────────┬────────────────────────────────────────────────────┐
+│  1  AUTHN       │  JWT / API key, mode strict                → 401   │
+│                 │  the token's `sub` IS the agent identity           │
+├─────────────────┼────────────────────────────────────────────────────┤
+│  2  AUTHZ       │  extAuthz ─▶ cedar-shim ─▶ cedar-agent :8180       │
+│                 │  identity injected by the gateway          → 403   │
+├─────────────────┼────────────────────────────────────────────────────┤
+│  3  GUARDRAILS  │  regex mask  ·  webhook ─▶ presidio-adapter        │
+│                 │            ─▶ Presidio /analyze            → 403   │
+├─────────────────┼────────────────────────────────────────────────────┤
+│  4  ROUTE       │  the model name selects the backend                │
+│                 │  Ollama · OpenAI · Azure · Bedrock · Vertex · …    │
+├─────────────────┼────────────────────────────────────────────────────┤
+│  5  GUARDRAILS  │  the same two checks over the response     → 403   │
+├─────────────────┼────────────────────────────────────────────────────┤
+│  6  TELEMETRY   │  OTel ─▶ collector (allow-list) ─▶ Langfuse :3300  │
+│                 │  request log ─▶ postgres ─▶ the Analytics tab      │
+└─────────────────┴────────────────────────────────────────────────────┘
+    │
+    ▼  completion, with usage.total_tokens
 ```
 
 A tool or MCP call follows the **identical** path; only step 4 differs. One

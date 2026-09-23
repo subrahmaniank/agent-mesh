@@ -125,11 +125,24 @@ identifier, not a person.
 ## The path out
 
 ```
-agentgateway ──OTLP/gRPC──▶ otel-collector ──OTLP/HTTP──▶ Langfuse :3300
-orchestrator ──OTLP/gRPC──▶      │
-remote-runner ─OTLP/gRPC──▶      └─ allow-list: everything not explicitly
-                                    named is dropped; token, cost and model
-                                    attributes are what survive
+┌────────────────┐
+│  agentgateway  │──┐
+└────────────────┘  │
+┌────────────────┐  │                ┌────────────────────────┐
+│  orchestrator  │──┼── OTLP/gRPC ──▶│  otel-collector :4317  │
+└────────────────┘  │                │                        │
+┌────────────────┐  │                │  allow-list: anything  │
+│  remote-runner │──┘                │  not explicitly named  │
+└────────────────┘                   │  is dropped            │
+                                     └───────────┬────────────┘
+                                                 │ OTLP/HTTP
+                                                 ▼
+                                     ┌────────────────────────┐
+                                     │  Langfuse :3300        │
+                                     │                        │
+                                     │  token, cost and model │
+                                     │  attributes survive    │
+                                     └────────────────────────┘
 ```
 
 Langfuse runs as its own compose project, so the collector reaches it over the

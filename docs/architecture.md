@@ -19,23 +19,36 @@ and whichever **LLM providers** are configured.
 ## Design time — onboarding an agent
 
 ```
- developer                 operator                       platform
- ─────────                 ────────                       ────────
- arctl publish  ┄┄▶  agentregistry                    (optional — not running
-                     · version, publisher verification     on this deployment)
-                     · APPROVAL WORKFLOW ┄┄▶ approved artifact
-                                                   ┆
-                     register principal             ▼
-                     + model resources      cedar-agent
-                     cedar/entities.json    · principal = agent identity
-                     cedar/policies/*.cedar · action    = call_model
-                       ──▶ cedar-loader                  | call_tool
-                                           ·             | list_models
-                                           · resource  = model | tool
-                                                   │        | platform
-                     issue credential ──▶ agentgateway
-                       agent_token.py       (JWT `sub` = the principal id)
-                     add MCP servers  ──▶ agentgateway mcp.targets
+ developer          operator                        platform
+ ─────────          ────────                        ────────
+
+┌─────────────┐    ┌──────────────────────────┐    ┌────────────────────────┐
+│arctl publish│┄┄┄▶│ agentregistry            │    │ not started here —     │
+└─────────────┘    │ version · publisher check│┄┄┄▶│ registry_status in     │
+                   │ APPROVAL WORKFLOW        │    │ entities.json is       │
+                   └──────────────────────────┘    │ set by hand            │
+                                                   └────────────────────────┘
+
+                   ┌──────────────────────────┐    ┌────────────────────────┐
+                   │ cedar/entities.json      │    │ cedar-agent :8180      │
+                   │ cedar/policies/*.cedar   │───▶│ principal = the agent  │
+                   │   ─▶ docker compose      │    │ action   = call_model |│
+                   │      restart cedar-loader│    │             call_tool |│
+                   └──────────────────────────┘    │             list_models│
+                                                   │ resource = model | tool│
+                                                   │             | platform │
+                                                   └────────────────────────┘
+
+                   ┌──────────────────────────┐    ┌────────────────────────┐
+                   │ scripts/agent_token.py   │    │ agentgateway :4000     │
+                   │   issue <agent-name>     │───▶│ the JWT `sub` IS the   │
+                   └──────────────────────────┘    │ Cedar principal id     │
+                                                   └────────────────────────┘
+
+                   ┌──────────────────────────┐    ┌────────────────────────┐
+                   │ register MCP servers     │───▶│ agentgateway           │
+                   └──────────────────────────┘    │ mcp.targets            │
+                                                   └────────────────────────┘
 ```
 
 Solid arrows are what runs today; the dashed registry path is the intended
@@ -53,30 +66,41 @@ agent
   │  POST :4000/v1/chat/completions   {model, messages}
   │  Authorization: Bearer <credential>
   ▼
-agentgateway
-  1. AUTHN       jwtAuth, mode: strict                → 401 if absent or invalid
-                 the token's `sub` IS the agent identity
-  2. AUTHZ       extAuthz(HTTP) → cedar-shim
-                    gateway forwards ONLY `authorization` + `host`, and
-                    injects  x-agentmesh-agent: jwt.sub  (a CEL expression)
-                    — so a client-set identity header never arrives
-                    → cedar-agent POST /v1/is_authorized
-                    → {"decision":"Allow"|"Deny"}     → shim maps to 200 | 403
-  3. GUARDRAILS  a. regex prompt guards — mask SSN / card / email inline
-                 b. webhook → presidio-adapter → Presidio /analyze
-                    NER hit that regex missed         → REJECT 403
-  4. ROUTE       llm.models[] — model name selects the backend
-                 (openAI | anthropic | azure | bedrock | vertex | gemini |
-                  ollama | vLLM | …), with aliasing, failover, load balancing
-  ▼
- the configured LLM backend ──▶ completion
-  ▼
-  5. GUARDRAILS  the same two checks over the response
-  6. TELEMETRY   OTel span: tokens, model, session; log: realized cost
-  ▼
-OTel Collector ──(allow-list: only named attributes survive)──▶ Langfuse
-  ▼
-Langfuse — trace grouped by session, with tokens and cost
+┌─────────────────┬──────────────────────────────────────────────────────┐
+│  1  AUTHN       │  jwtAuth, mode: strict                    → 401      │
+│                 │  the token's `sub` IS the agent identity             │
+│                 │  JWKS key types: RSA | EC | OKP[Ed25519]             │
+├─────────────────┼──────────────────────────────────────────────────────┤
+│  2  AUTHZ       │  extAuthz(HTTP) ─▶ cedar-shim                        │
+│                 │    only `authorization` + `host` are forwarded;      │
+│                 │    the gateway injects x-agentmesh-agent: jwt.sub    │
+│                 │    (CEL) — a client-set header never arrives         │
+│                 │  cedar-shim ─▶ cedar-agent /v1/is_authorized         │
+│                 │    {"decision":"Allow"|"Deny"} ─▶ 200 | 403          │
+├─────────────────┼──────────────────────────────────────────────────────┤
+│  3  GUARDRAILS  │  a. regex prompt guards — mask SSN / card / email    │
+│                 │     inline, before the prompt leaves the gateway     │
+│                 │  b. webhook ─▶ presidio-adapter ─▶ Presidio          │
+│                 │     an NER hit that regex missed          → 403      │
+│                 │     failureMode: failClosed                          │
+├─────────────────┼──────────────────────────────────────────────────────┤
+│  4  ROUTE       │  llm.models[] — the model name picks the backend     │
+│                 │  openAI | anthropic | azure | bedrock | vertex |     │
+│                 │  gemini | ollama | vLLM | …  aliasing, failover,     │
+│                 │  load balancing                                      │
+│                 │                                                      │
+│                 │     ─▶ the configured LLM backend ─▶ completion      │
+├─────────────────┼──────────────────────────────────────────────────────┤
+│  5  GUARDRAILS  │  the same two checks over the response     → 403     │
+├─────────────────┼──────────────────────────────────────────────────────┤
+│  6  TELEMETRY   │  OTel span: tokens, model, session                   │
+│                 │  request log ─▶ postgres ─▶ the Analytics tab        │
+└─────────────────┴──────────────────────────────────────────────────────┘
+  │
+  ▼  OTel Collector ─(allow-list: only the named
+                     attributes survive)─▶ Langfuse :3300
+  │
+  ▼  a trace grouped by session, with tokens and cost
 ```
 
 **A tool or MCP call is the same path.** Steps 1, 2, 3, 5 and 6 are identical;
@@ -88,10 +112,22 @@ the agent is reaching for.
 ## Inside the agent
 
 ```
-@control()-decorated step
-   │ pre   ──▶ Agent Control ──▶ evaluators (regex | list | json | sql | luna2)
-   │                              → deny | steer | observe
-   ▼ post  ──▶ the same evaluation over the output
+          input                     output
+            │                       │
+            ▼                       ▼
+        ┌──────────────────────────────┐
+        │                              │
+        │   @control()-decorated step  │
+        │                              │
+        └────────┬─────────────┬───────┘
+                 │ pre         │ post
+                 ▼             ▼
+      ┌────────────────────────────────────┐
+      │ Agent Control :8000                │
+      │ evaluators: regex | list | json    │
+      │             | sql | luna2          │
+      │ verdict:    deny | steer | observe │
+      └────────────────────────────────────┘
 ```
 
 Agent Control sees what the gateway cannot: *which step* of the agent's own
